@@ -342,6 +342,13 @@ void Menu() {
          "post-processing stays at 1080p — noticeably slower on the Steam Deck and older GPUs. "
          "Off: everything renders at the preset resolution; changes need a restart. Auto turns "
          "it on for powerful discrete GPUs. Applies after restarting the game.");
+    ImGui::SeparatorText("Mouse");
+    Slider("Sensitivity", s.mouse_sens, 0.1f, 4.0f);
+    Hint("Mouse look (bbport addition): moving the mouse turns the camera. Left button: "
+         "right-hand attack (R1). Right button: left-hand weapon (L1). Middle button: lock on "
+         "(R3). Side buttons: L2 and R2. Wheel: previous/next item or weapon. The cursor comes "
+         "back while this menu is open. BB_MOUSE_LOOK=0 disables the mouse, BB_MOUSE_SENS sets "
+         "the initial sensitivity.");
     ImGui::SeparatorText("Game effects (after restart)");
     static const char* lods[] = {"Highest (-2)", "As in the game", "Lower (1)", "Lowest (2)"};
     static constexpr int lod_values[] = {-2, 0, 1, 2};

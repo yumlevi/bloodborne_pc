@@ -328,6 +328,22 @@ extern "C" int bbgpu_overlay_captures_input(void) {
     return BbOverlay::CapturesInput() ? 1 : 0;
 }
 
+// bbport: mouse look for the pad runtime (see gpu/shim/window.cpp for the capture policy).
+extern "C" int bbgpu_mouse_state(float* dx, float* dy, unsigned* buttons, float* wheel) {
+    float x = 0.0f, y = 0.0f, w = 0.0f;
+    unsigned b = 0;
+    const int active = g_window ? g_window->ConsumeMouse(x, y, b, w) : 0;
+    if (dx) *dx = x;
+    if (dy) *dy = y;
+    if (wheel) *wheel = w;
+    if (buttons) *buttons = b;
+    return active;
+}
+
+extern "C" float bbgpu_mouse_sensitivity(void) {
+    return BbSettings::Get().mouse_sens.load(std::memory_order_relaxed);
+}
+
 extern "C" int bbgpu_text_input_begin(const char* initial, const char* prompt) {
     if (!g_window) return 0;
     g_window->BeginTextInput(initial ? initial : "", prompt ? prompt : "Text");

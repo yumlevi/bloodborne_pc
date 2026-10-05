@@ -33,6 +33,13 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* Mouse look (runtime_pad.c): relative motion since the previous call, the buttons held
+ * (bit 0 left, 1 middle, 2 right, 3 X1, 4 X2) and the wheel ticks (positive = up).
+ * Returns 1 while the relative capture is active, 0 when there is no window or the
+ * settings menu owns the cursor. */
+int bbgpu_mouse_state(float *dx, float *dy, unsigned *buttons, float *wheel);
+/* Mouse sensitivity multiplier from the settings menu (bbport.ini "mouse_sens"). */
+float bbgpu_mouse_sensitivity(void);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 #ifdef __cplusplus
