@@ -1,11 +1,14 @@
 /* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
  * by the window thread (gpu/shim/window.cpp); here state is only sampled.
  *
- * Keyboard layout (when no gamepad is connected):
- *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
- *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
- *   Enter Options, Tab left touchpad, Backspace right touchpad,
- *   IJKL d-pad (I up, K down, J left, L right). */
+ * Keyboard layout (when no gamepad is connected), modelled on Elden Ring's PC defaults:
+ *   WASD left stick, arrow keys d-pad (up: blood bullets, down: switch item, left/right:
+ *   switch weapon), IJKL the same d-pad, Space/Shift/Q Cross (cancel, roll, dash),
+ *   E Circle (interact/confirm, the Asian layout's ○), Enter Circle too, R Square (use item),
+ *   1/2/3/4 L1/L2/R1/R2, Z/X L3, Escape Options (the game menu),
+ *   G left touchpad (gesture menu), V right touchpad (quick item menu).
+ * Mouse (sample_mouse): look, left R1, right L2 (gun), middle R3 (lock-on), side 1 L1,
+ *   side 2 R2, wheel down switches items. */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -127,27 +130,36 @@ static void sample_host(PadData *d) {
         }
         // Back/Select on pads without a touch surface is a left-side click.
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_TAB]) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
+        /* G: left side of the touchpad (gestures), V: right side (quick item menu). */
+        if (k && k[SDL_SCANCODE_G]) touch_click(d,0);
+        if (k && k[SDL_SCANCODE_V]) touch_click(d,1);
         return;
     }
     if (!k) return;
     static const struct { SDL_Scancode key; uint32_t ps; } keys[]={
-        {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_E,BTN_SQUARE},
-        {SDL_SCANCODE_Q,BTN_TRIANGLE}, {SDL_SCANCODE_1,BTN_L1}, {SDL_SCANCODE_3,BTN_R1},
-        {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2}, {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
-        {SDL_SCANCODE_RETURN,BTN_OPTIONS},
+        /* Elden Ring PC layout: Space/Shift/Q = dodge-cancel (Cross), E = interact (Circle),
+         * R = use item (Square), 1/2/3/4 = the four shoulder buttons, Esc = the game menu. */
+        {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LSHIFT,BTN_CROSS}, {SDL_SCANCODE_RSHIFT,BTN_CROSS},
+        {SDL_SCANCODE_Q,BTN_CROSS},
+        {SDL_SCANCODE_E,BTN_CIRCLE}, {SDL_SCANCODE_RETURN,BTN_CIRCLE},
+        {SDL_SCANCODE_R,BTN_SQUARE},
+        {SDL_SCANCODE_1,BTN_L1}, {SDL_SCANCODE_2,BTN_L2}, {SDL_SCANCODE_3,BTN_R1}, {SDL_SCANCODE_4,BTN_R2},
+        {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_X,BTN_L3},
+        {SDL_SCANCODE_ESCAPE,BTN_OPTIONS},
+        /* Arrow keys and IJKL: the d-pad (up is the game's blood-bullet shortcut). */
+        {SDL_SCANCODE_UP,BTN_UP}, {SDL_SCANCODE_DOWN,BTN_DOWN},
+        {SDL_SCANCODE_LEFT,BTN_LEFT}, {SDL_SCANCODE_RIGHT,BTN_RIGHT},
         {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
     };
     for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
-    if (k[SDL_SCANCODE_TAB]) touch_click(d,0);
-    if (k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
+    /* G: left side of the touchpad (gestures), V: right side (quick item menu). */
+    if (k[SDL_SCANCODE_G]) touch_click(d,0);
+    if (k[SDL_SCANCODE_V]) touch_click(d,1);
     if (d->buttons & BTN_L2) d->l2=255;
     if (d->buttons & BTN_R2) d->r2=255;
     d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
     d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
-    d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
-    d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+    /* The camera is the mouse only (sample_mouse); the arrow keys are the d-pad now. */
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated
@@ -269,9 +281,79 @@ static void replay_sample(PadData *d) {
     d->left_x=s->axes[0]; d->left_y=s->axes[1]; d->right_x=s->axes[2]; d->right_y=s->axes[3];
     d->l2=s->l2; d->r2=s->r2;
 }
+/* bbport addition: mouse look. Moving the mouse turns the camera like the right stick, and the
+ * mouse buttons and wheel are added to the pad state. A stick is positional while a mouse gives
+ * motion, so the accumulated deflection decays on every sample: a flick becomes a short, smooth
+ * turn instead of a jump. Sensitivity comes from the settings menu (bbgpu_mouse_sensitivity),
+ * BB_MOUSE_SENS overrides it, BB_MOUSE_LOOK=0 disables the mouse. */
+static void sample_mouse(PadData *d) {
+    static int enabled=-1;
+    static int invert_y;
+    static float stick_x, stick_y;
+    static unsigned wheel_button;
+    static uint64_t wheel_until;
+    if (enabled<0) {
+        const char *off=getenv("BB_MOUSE_LOOK");
+        const char *inv=getenv("BB_MOUSE_INVERT_Y");
+        enabled=!(off && off[0]=='0');
+        invert_y=(inv && inv[0]=='1');
+    }
+    if (!enabled) return;
+    float dx=0, dy=0, wheel=0;
+    unsigned buttons=0;
+    if (!bbgpu_mouse_state(&dx,&dy,&buttons,&wheel)) return; /* menu open or no window */
+    float sens=bbgpu_mouse_sensitivity();
+    if (!(sens>0.0f)) sens=1.0f;
+    const char *sens_env=getenv("BB_MOUSE_SENS");
+    if (sens_env) { const float v=(float)atof(sens_env); if (v>0.0f) sens=v; }
+    /* The engine turns the camera at a rate proportional to the stick deflection, so the fastest
+     * possible turn is one full deflection at the in-game "鏡頭移動速度" (options > control
+     * settings). Mouse movement therefore saturates the stick quickly; 12.0 reaches full
+     * deflection within one frame even for slow movements. Tune it with the menu slider. */
+    const float k=12.0f*sens;
+    /* How fast the stick deflection decays between samples: lower = snappier (the camera stops
+     * sooner), higher = smoother but with a short glide. BB_MOUSE_SMOOTH overrides it. */
+    static float decay=-1.0f;
+    if (decay<0.0f) {
+        const char *env=getenv("BB_MOUSE_SMOOTH");
+        decay=env ? (float)atof(env) : 0.55f;
+        if (!(decay>0.05f && decay<0.95f)) decay=0.55f;
+    }
+    stick_x+=dx*k; stick_y+=(invert_y ? -dy : dy)*k;
+    /* Keep a bounded over-range so a hard flick stays at full deflection for a couple of extra
+     * frames instead of being cut off the moment the mouse stops. */
+    const float limit=127.0f, carry=220.0f;
+    if (stick_x>limit+carry) stick_x=limit+carry; else if (stick_x<-(limit+carry)) stick_x=-(limit+carry);
+    if (stick_y>limit+carry) stick_y=limit+carry; else if (stick_y<-(limit+carry)) stick_y=-(limit+carry);
+    stick_x*=decay; stick_y*=decay;
+    if (stick_x>-0.5f && stick_x<0.5f) stick_x=0.0f;
+    if (stick_y>-0.5f && stick_y<0.5f) stick_y=0.0f;
+    float out_x=stick_x, out_y=stick_y;
+    if (out_x>limit) out_x=limit; else if (out_x<-limit) out_x=-limit;
+    if (out_y>limit) out_y=limit; else if (out_y<-limit) out_y=-limit;
+    if (out_x!=0.0f || out_y!=0.0f) {
+        d->right_x=(uint8_t)(128+(int)(out_x<0.0f ? out_x-0.5f : out_x+0.5f));
+        d->right_y=(uint8_t)(128+(int)(out_y<0.0f ? out_y-0.5f : out_y+0.5f));
+    }
+    if (buttons & (1u<<0)) d->buttons|=BTN_R1; /* left button: right hand attack */
+    if (buttons & (1u<<1)) d->buttons|=BTN_R3; /* middle button: lock on / off (mouse only) */
+    if (buttons & (1u<<2)) d->buttons|=BTN_L2; /* right button: shoot (left hand weapon) */
+    if (buttons & (1u<<3)) d->buttons|=BTN_L1; /* side button 1: transform weapon */
+    if (buttons & (1u<<4)) d->buttons|=BTN_R2; /* side button 2: strong right hand attack */
+    const uint64_t now=now_us();
+    /* Wheel down switches items (↓). Wheel up is left unbound on purpose: ↑ is the game's
+     * "blood bullets" shortcut, which spends health — too easy to hit by accident. */
+    if (wheel<0.0f) {
+        wheel_until=now+120000u; /* the game polls per frame: hold the d-pad briefly */
+        wheel_button=BTN_DOWN;
+    }
+    if (now<wheel_until) d->buttons|=wheel_button;
+}
+
 static void sample(PadData *d) {
     sample_host(d);
     if (bbgpu_overlay_captures_input()) return;
+    sample_mouse(d);
     record_sample(d);
     read_inject();
     replay_sample(d);
