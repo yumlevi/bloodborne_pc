@@ -1,2 +1,6 @@
 # cmd.exe needs CRLF batch files
 *.bat text eol=crlf
+
+# Patch files are fed to git apply against submodule working trees, which are not
+# CRLF-converted: core.autocrlf=true would otherwise make every hunk fail to match.
+*.patch text eol=lf
