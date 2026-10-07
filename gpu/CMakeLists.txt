@@ -212,6 +212,10 @@ else()
 endif()
 
 # Explicit test targets; neither launches the game nor needs a Vulkan device.
+add_executable(memory-hash-test EXCLUDE_FROM_ALL ../tests/test_memory_hash.cpp)
+target_compile_options(memory-hash-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
+target_include_directories(memory-hash-test PRIVATE shim)
+target_link_libraries(memory-hash-test PRIVATE PkgConfig::XXHASH)
 add_executable(motion-history-test EXCLUDE_FROM_ALL ../tests/test_motion_history.cpp)
 target_compile_options(motion-history-test PRIVATE -UNDEBUG -Wall -Wextra -Werror)
 target_include_directories(motion-history-test PRIVATE ..)
