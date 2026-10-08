@@ -170,6 +170,20 @@ static void describe(char *out, size_t size, uintptr_t a) {
         snprintf(out, size, "%s+0x%llx", name ? name + 1 : path, (unsigned long long)(a - (uintptr_t)info.AllocationBase));
     } else snprintf(out, size, "0x%llx", (unsigned long long)a);
 }
+static const char *exception_name(DWORD code) {
+    switch (code) {
+    case EXCEPTION_ACCESS_VIOLATION: return "access violation";
+    case EXCEPTION_ILLEGAL_INSTRUCTION: return "illegal instruction";
+    case EXCEPTION_PRIV_INSTRUCTION: return "privileged instruction";
+    case EXCEPTION_INT_DIVIDE_BY_ZERO: return "integer divide by zero";
+    case EXCEPTION_INT_OVERFLOW: return "integer overflow";
+    case EXCEPTION_STACK_OVERFLOW: return "stack overflow";
+    case EXCEPTION_IN_PAGE_ERROR: return "in-page I/O error";
+    case EXCEPTION_DATATYPE_MISALIGNMENT: return "misaligned data";
+    case EXCEPTION_BREAKPOINT: return "breakpoint";
+    default: return "unknown exception";
+    }
+}
 /* No DLL detach or CRT teardown: other threads may hold the locks those need. */
 static __attribute__((noreturn)) void terminate(unsigned code) {
     fflush(NULL);
@@ -183,7 +197,15 @@ static void report_exception(EXCEPTION_POINTERS *e) {
     CONTEXT *c = e->ContextRecord;
     char where[512];
     describe(where, sizeof(where), (uintptr_t)c->Rip);
-    fprintf(stderr, "%s fault 0x%08lx at %s", guest_address((uintptr_t)c->Rip) ? "Guest" : "Host", r->ExceptionCode, where);
+    SYSTEMTIME utc;
+    GetSystemTime(&utc);
+    fprintf(stderr, "\n=== bbport crash report ===\n");
+    fprintf(stderr, "UTC %04u-%02u-%02u %02u:%02u:%02u.%03u  pid=%lu tid=%lu\n",
+            utc.wYear, utc.wMonth, utc.wDay, utc.wHour, utc.wMinute, utc.wSecond,
+            utc.wMilliseconds, GetCurrentProcessId(), GetCurrentThreadId());
+    fprintf(stderr, "%s fault 0x%08lx (%s) at %s",
+            guest_address((uintptr_t)c->Rip) ? "Guest" : "Host", r->ExceptionCode,
+            exception_name(r->ExceptionCode), where);
     if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2)
         fprintf(stderr, ", %s address %p", r->ExceptionInformation[0] == 1 ? "writing" : r->ExceptionInformation[0] == 8 ? "executing" : "reading",
                 (void *)r->ExceptionInformation[1]);
@@ -194,8 +216,23 @@ static void report_exception(EXCEPTION_POINTERS *e) {
         LocalFree(description);
     }
     fprintf(stderr, " (thread %lu %s)\n", GetCurrentThreadId(), thread_name);
+    if (r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION && r->NumberParameters >= 2) {
+        MEMORY_BASIC_INFORMATION fault_info;
+        const void *address = (const void *)r->ExceptionInformation[1];
+        if (VirtualQuery(address, &fault_info, sizeof(fault_info))) {
+            fprintf(stderr, "  target region: base=%p allocation=%p size=0x%llx state=0x%lx protect=0x%lx type=0x%lx\n",
+                    fault_info.BaseAddress, fault_info.AllocationBase,
+                    (unsigned long long)fault_info.RegionSize, fault_info.State,
+                    fault_info.Protect, fault_info.Type);
+        } else fprintf(stderr, "  target region: VirtualQuery failed (%lu)\n", GetLastError());
+    }
+    fprintf(stderr, "  rip=%016llx eflags=%08lx exception_address=%p parameters=%lu\n",
+            c->Rip, c->EFlags, r->ExceptionAddress, r->NumberParameters);
     fprintf(stderr, "  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
             c->Rax, c->Rbx, c->Rcx, c->Rdx, c->Rsi, c->Rdi, c->Rbp, c->Rsp);
+    fprintf(stderr, "  r8 =%016llx r9 =%016llx r10=%016llx r11=%016llx\n"
+                    "  r12=%016llx r13=%016llx r14=%016llx r15=%016llx\n",
+            c->R8, c->R9, c->R10, c->R11, c->R12, c->R13, c->R14, c->R15);
     /* rbp frame chain; ReadProcessMemory so a bad frame cannot fault again. */
     uintptr_t rbp = c->Rbp;
     for (int depth = 0; depth < 24 && rbp; ++depth) {
@@ -214,6 +251,7 @@ static void report_exception(EXCEPTION_POINTERS *e) {
         fprintf(stderr, "  host #%u %s\n", i, where);
     }
     if (gpu_enabled && r->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) bbgpu_dump_guest_writes(e);
+    fprintf(stderr, "=== end crash report; launcher exit code 139 ===\n");
     fflush(NULL);
 }
 /* Thread dump on request: SetEvent on "Local\bbport-dump-<pid>" prints every thread's call
