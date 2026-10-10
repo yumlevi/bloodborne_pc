@@ -259,6 +259,9 @@ GPU page tracking and crash reports run in a vectored exception handler; the gue
 pointer lives in a TEB TLS slot (`patch_tls_reads` in `src/probe.c`); `src/win32_compat.c`
 covers file system and time zone details. With libc++ on Windows, `std::thread::get_id()` and
 `std::jthread::joinable()` ask the kernel (`GetThreadId`): hot paths keep their own flags.
+Startup-patched 720p and 1080p outputs keep the game's native 5056 MiB direct-memory budget;
+1440p and 4K use 9152 MiB for their larger render targets. `BB_DMEM_MB` remains an explicit
+override.
 
 ## Repository layout
 

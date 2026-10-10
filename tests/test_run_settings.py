@@ -46,7 +46,8 @@ class RestartResolutionTests(unittest.TestCase):
                 'stage=int(os.environ.get("BB_TEST_STAGE", "0"))\n'
                 'with (config.parent/"environments").open("a") as f:\n'
                 '    f.write(json.dumps({key:os.environ.get(key) for key in '
-                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES")})+"\\n")\n'
+                '("BB_RENDER_RES", "BB_OUTPUT_RES", "BB_AUTO_RENDER_RES", '
+                '"BB_DMEM_MB", "BB_AUTO_DMEM")})+"\\n")\n'
                 'if stage<2:\n'
                 '    config.write_text("upscaler=fsr3\\npreset=4\\noutput_res="+'
                 '("1280x720" if stage==0 else "1920x1080")+"\\n")\n'
@@ -55,7 +56,8 @@ class RestartResolutionTests(unittest.TestCase):
             probe.chmod(0o755)
             env = dict(os.environ, BB_PREBUILT='1', BB_PROBE=str(probe), PYTHON=str(python),
                        BB_DATA_DIR=str(data), BB_CONFIG=str(config), BB_GAME_DIR=str(data))
-            for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_TEST_STAGE'):
+            for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES', 'BB_DMEM_MB',
+                        'BB_AUTO_DMEM', 'BB_TEST_STAGE'):
                 env.pop(key, None)
             env.pop('BB_LIVE_RES', None)
             if explicit:
@@ -83,6 +85,8 @@ class RestartResolutionTests(unittest.TestCase):
         self.assertEqual([row['BB_RENDER_RES'] for row in rows], ['854x480', '426x240', None])
         self.assertEqual([row['BB_OUTPUT_RES'] for row in rows], ['1280x720', '1280x720', None])
         self.assertEqual([row['BB_AUTO_RENDER_RES'] for row in rows], ['1', '1', None])
+        self.assertEqual([row['BB_DMEM_MB'] for row in rows], ['5056', '5056', None])
+        self.assertEqual([row['BB_AUTO_DMEM'] for row in rows], ['1', '1', None])
 
     def test_live_resolution_keeps_guest_sizes_native(self):
         rows = self.run_restarts(live=True)

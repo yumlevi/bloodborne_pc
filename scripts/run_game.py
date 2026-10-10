@@ -106,6 +106,38 @@ def configured_live_resolution(config):
     return value
 
 
+def direct_memory_mb_for_output(output):
+    """Guest direct-memory budget for a startup-patched output resolution.
+
+    Bloodborne's native 5056 MiB budget is sufficient through 1080p. Higher resolutions create
+    much larger guest render targets and keep the established extra 4096 MiB headroom.
+    Unknown custom values stay on the conservative high budget.
+    """
+    match = re.fullmatch(r'(\d+)x(\d+)', output or '')
+    if not match:
+        return '9152'
+    width, height = map(int, match.groups())
+    return '5056' if width <= 1920 and height <= 1080 else '9152'
+
+
+def clear_automatic_direct_memory():
+    """Discard a budget chosen for the previous launch, preserving an explicit override."""
+    if os.environ.get('BB_AUTO_DMEM') == '1':
+        os.environ.pop('BB_DMEM_MB', None)
+        os.environ.pop('BB_AUTO_DMEM', None)
+
+
+def configure_direct_memory(output):
+    """Set and mark an automatic budget unless BB_DMEM_MB was supplied explicitly."""
+    configured = env('BB_DMEM_MB')
+    if configured:
+        return configured
+    configured = direct_memory_mb_for_output(output)
+    os.environ['BB_DMEM_MB'] = configured
+    os.environ['BB_AUTO_DMEM'] = '1'
+    return configured
+
+
 def gpu_check(caps):
     """live_resolution=auto: '1' when the GPU check (tools/gpu_capabilities.c) recommends live
     resolution changes, else '0' (also when it cannot run)."""
@@ -280,6 +312,9 @@ def main():
         if os.environ.get('BB_AUTO_RENDER_RES') == '1':
             for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES'):
                 os.environ.pop(key, None)
+        # An in-game restart may change the output resolution. Recompute only values selected by
+        # this launcher; an explicit BB_DMEM_MB supplied by a developer remains authoritative.
+        clear_automatic_direct_memory()
         # BB_RENDER_RES=WxH explicitly sets the game's render resolution (a patch at start).
         # Frame rate: BB_FPS=uncap (default; delta-time patch, vblank follows the display),
         # 60/90 (fixed-timestep patches) or 30 (unpatched). BB_PATCHES adds patch names ("a;b").
@@ -312,8 +347,8 @@ def main():
             print(f'Output {scaled_output}: live resolution changes (live_resolution=0: startup patch)')
         elif scaled_output:
             os.environ.update(BB_RENDER_RES=scaled_render, BB_OUTPUT_RES=scaled_output, BB_AUTO_RENDER_RES='1')
-            os.environ['BB_DMEM_MB'] = env('BB_DMEM_MB', '9152')
-            print(f'Output {scaled_output}: scene {scaled_render}, direct memory {os.environ["BB_DMEM_MB"]} MiB '
+            direct_memory = configure_direct_memory(scaled_output)
+            print(f'Output {scaled_output}: scene {scaled_render}, direct memory {direct_memory} MiB '
                   '(live_resolution=1: live changes)')
         run([PYTHON, 'scripts/patches.py', '--out', out, '--fps', fps, '--extra', env('BB_PATCHES'),
              '--settings', config, '--game-dir', merged, '--render-res', env('BB_RENDER_RES'),
