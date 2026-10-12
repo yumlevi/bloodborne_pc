@@ -19,6 +19,23 @@ static constexpr u32 PipelineKeyVersion = 5u; // bbport: Info layout (ImageResou
 
 namespace Vulkan {
 
+// bbport: whether a SPIR-V module decorates a specialization constant with this SpecId
+// (OpDecorate <id> SpecId <literal>: 4 words, opcode 71, decoration 1).
+static bool HasSpecId(std::span<const u32> spv, u32 spec_id) {
+    for (size_t i = 5; i < spv.size();) {
+        const u32 words = spv[i] >> 16, opcode = spv[i] & 0xFFFF;
+        if (words == 0) {
+            break;
+        }
+        if (opcode == 71 && words == 4 && i + 3 < spv.size() && spv[i + 2] == 1 &&
+            spv[i + 3] == spec_id) {
+            return true;
+        }
+        i += words;
+    }
+    return false;
+}
+
 void RegisterPipelineData(const ComputePipelineKey& key,
                           ComputePipeline::SerializationSupport& sdata) {
     if (!Storage::DataBase::Instance().IsOpened()) {
@@ -115,12 +132,7 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
     spec.Deserialize(ar);
     info.Deserialize(ar);
 
-    // Motion vertex shaders embed session-local buffer device addresses. They must be
-    // recompiled for the current allocation, never loaded from a previous process.
-    if (info.hw_stage == Shader::HwStage::Vertex && spec.runtime_info.hw.vs.motion_vectors) {
-        return false;
-    }
-
+    // Motion vertex shaders are checked with their SPIR-V (LoadPipelineStage).
     fetch_shader_data = spec.fetch_shader_data;
     return true;
 }
@@ -268,6 +280,15 @@ bool PipelineCache::LoadPipelineStage(Serialization::Archive& ar, size_t stage) 
                                        fmt::format("{:#018x}_{}", program->info.pgm_hash, perm_idx),
                                        spv);
     if (spv.empty()) {
+        return false;
+    }
+    // Motion vertex shaders take this session's buffer addresses as specialization constants
+    // (MotionVectors::*SpecId). Older ones embedded the addresses of the session that compiled
+    // them: those are compiled again, and their new SPIR-V replaces them in the cache. None is
+    // loaded while object motion is off.
+    if (program->info.hw_stage == Shader::HwStage::Vertex && spec.runtime_info.hw.vs.motion_vectors &&
+        (!Shader::MotionVectors::positions_address ||
+         !HasSpecId(spv, Shader::MotionVectors::PositionsSpecId))) {
         return false;
     }
 

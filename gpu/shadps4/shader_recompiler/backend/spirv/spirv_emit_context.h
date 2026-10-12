@@ -258,6 +258,8 @@ public:
     Id motion_in_cur{};
     Id motion_in_prev{};
     Id motion_frag_out{};
+    Id motion_params_base{};    ///< specialization constants: the buffers' addresses
+    Id motion_positions_base{};
     [[nodiscard]] bool VertexMotion() const {
         return sw_stage == SwStage::Vertex && hw_stage == HwStage::Vertex &&
                runtime_info.hw.vs.motion_vectors && MotionVectors::positions_address != 0;

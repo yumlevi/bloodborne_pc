@@ -9,7 +9,10 @@
 // the graphics pipeline and resource sharps of each direct draw. All helpers run as
 // SCHED_IDLE: they only use idle cores. The GPU thread uses a prepared draw only when the
 // running register checksums match and the flattened user data it computes itself equals the
-// worker's; otherwise it takes the regular path. Workers never create or compile anything.
+// worker's; otherwise it takes the regular path. Workers create nothing the GPU thread uses
+// without checking, except what they compile ahead (PipelineCache::PrecompileGraphicsPipeline):
+// shaders the GPU thread has not met yet and pipelines for keys it has none for, which it
+// takes when it reaches them (BB_COMPILE_AHEAD=0 turns this off).
 
 #pragma once
 

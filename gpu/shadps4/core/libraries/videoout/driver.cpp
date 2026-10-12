@@ -29,6 +29,10 @@ extern std::unique_ptr<AmdGpu::Liverpool> liverpool;
 namespace Vulkan {
 extern std::atomic<u64> g_bb_compile_ns;
 extern std::atomic<u32> g_bb_compiles;
+extern std::atomic<u64> g_bb_ahead_ns;
+extern std::atomic<u32> g_bb_ahead_compiles;
+extern std::atomic<u32> g_bb_ahead_taken;
+extern std::atomic<u32> g_bb_compile_waits;
 } // namespace Vulkan
 
 namespace Libraries::VideoOut {
@@ -448,6 +452,17 @@ void VideoOutDriver::Flip(const Request& req) {
                         BbStats::tick_wait_ns.exchange(0) / (window * 1e7),
                         frames ? double(BbStats::reduced_draws.exchange(0)) / frames : 0.0,
                         frames ? double(BbStats::scene_draws.exchange(0)) / frames : 0.0);
+            // bbport: compiles done ahead on the draw-preparation workers (not on the GPU thread),
+            // pipelines the GPU thread took from them, and its waits for one being built.
+            const u32 ahead = Vulkan::g_bb_ahead_compiles.exchange(0);
+            const u64 ahead_ns = Vulkan::g_bb_ahead_ns.exchange(0);
+            const u32 taken = Vulkan::g_bb_ahead_taken.exchange(0);
+            const u32 waits = Vulkan::g_bb_compile_waits.exchange(0);
+            if (ahead || taken || waits) {
+                std::printf("Compile ahead: %u shader/pipeline compiles on workers, %.1f ms; "
+                            "%u pipelines taken by the GPU thread, %u waits\n",
+                            ahead, ahead_ns / 1e6, taken, waits);
+            }
             // Frame pacing: spread of the guest flip intervals (judder that the mean hides).
             if (intervals.size() > 2) {
                 std::vector<double> sorted = intervals;

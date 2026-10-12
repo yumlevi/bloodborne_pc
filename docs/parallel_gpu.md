@@ -576,3 +576,35 @@ now reads guest memory for the constant ring, is not treated as a GPU-side threa
 (`IsGpuSideThreadId` accepts only stage B). Next: a run with `BB_WRITE_LOG=1` that crashes
 prints which logged write landed near the corrupted block; bisect the pipeline toggles
 (38 tasks, 39 pending fence waits, 41 recorder fences, 42 memory writes, 36 constant ring).
+
+## Compile ahead: shaders and pipelines on the workers (2026-10-11)
+
+New areas stuttered because every new shader and pipeline was compiled on the GPU thread, one
+after another, when it reached the draw: 98 compiles took 783 ms at one area transition (about
+8 ms each, mostly the driver building the pipeline). The draw-preparation workers saw those
+draws first but gave up on them (a program or permutation missing, or a key without a pipeline).
+
+Now (on by default; `BB_COMPILE_AHEAD=0` or toggle 1 << 58 turns it off):
+- A worker that misses a program or permutation translates it itself (its own recompiler pools,
+  `Program::info_template` copies) and inserts it under `programs_mutex`. The GPU thread's
+  lookups take that lock shared now; they run only on the regular path (about 10% of draws).
+  The SPIR-V and meta go to the cache with the final permutation index, decided at insertion:
+  a permutation two threads translated is kept once. A program being translated is claimed
+  (`programs_compiling`); the GPU thread missing it waits for that (at most 250 ms) instead of
+  translating it again. Guest memory faults during a worker's translation (the shader or its
+  fetch shader changed ahead of the GPU thread) jump out of `TranslateAhead`, whose frame holds
+  everything it made; the draw is left to the GPU thread.
+- A prepared draw whose key has no pipeline queues a job with copies of the selection (Infos
+  with their own user data, runtime infos, modules, fetch shader). Compile threads
+  (`bb:PipelineCompile`, a quarter of the hardware threads, 2 to 8) build it from those copies,
+  point its stages at the programs' Infos (what the GPU thread refreshes and the draw recording
+  thread snapshots) and leave it in `pipelines_ready`. The GPU thread, on a miss, takes it; one
+  being built is waited for (at most 250 ms); one still queued is withdrawn and built on the GPU
+  thread at once, rather than behind the other jobs. `graphics_pipelines` still changes only on
+  the GPU thread, under `pipelines_mutex`, which workers take shared to look into it.
+- Workers and compile threads raise themselves to normal priority while compiling: the GPU
+  thread may wait for the result.
+
+`BB_FRAME_STATS` adds a line when anything compiled ahead: compiles on workers and their time,
+pipelines the GPU thread took, and its waits. The "shader/pipeline compiles" of the frame stats
+remain those on the GPU thread, which is what stutters.

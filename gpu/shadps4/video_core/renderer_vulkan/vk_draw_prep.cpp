@@ -387,6 +387,7 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
     PipelineSelection sel{};
     sel.regs = regs.get();
     PrepWorker prep_worker{};
+    prep_worker.compile = PipelineCache::CompileAheadEnabled();
     sel.worker = &prep_worker;
     FlatArena arena;
     std::vector<std::shared_ptr<Submission>> path;
@@ -471,6 +472,8 @@ void DrawPreparation::WorkerLoop(std::stop_token stop, u32 index) {
                         PrepareVertexInputs(*vs, *sel.fetch_shader, *regs, draw.vertex, arena);
                     }
                     draw.state.store(PreparedDraw::Ready, std::memory_order_release);
+                    // A key the GPU thread has no pipeline for yet: built here, ahead of it.
+                    pipeline_cache.PrecompileGraphicsPipeline(sel);
                 } else {
                     draw.state.store(PreparedDraw::Unavailable, std::memory_order_release);
                 }

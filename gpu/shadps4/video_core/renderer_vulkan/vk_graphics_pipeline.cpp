@@ -166,6 +166,21 @@ GraphicsPipeline::GraphicsPipeline(
         .pDynamicStates = dynamic_states.data(),
     };
 
+    // bbport: an object motion variant reads this session's buffer addresses from
+    // specialization constants (runtime_info.h, MotionVectors).
+    const std::array<u64, 2> motion_addresses{Shader::MotionVectors::params_address,
+                                              Shader::MotionVectors::positions_address};
+    const std::array<vk::SpecializationMapEntry, 2> motion_entries{{
+        {Shader::MotionVectors::ParamsSpecId, 0, sizeof(u64)},
+        {Shader::MotionVectors::PositionsSpecId, sizeof(u64), sizeof(u64)},
+    }};
+    const vk::SpecializationInfo motion_specialization{
+        .mapEntryCount = static_cast<u32>(motion_entries.size()),
+        .pMapEntries = motion_entries.data(),
+        .dataSize = sizeof(motion_addresses),
+        .pData = motion_addresses.data(),
+    };
+
     boost::container::static_vector<vk::PipelineShaderStageCreateInfo, MaxShaderStages>
         shader_stages;
     auto stage = u32(Shader::SwStage::Vertex);
@@ -174,6 +189,7 @@ GraphicsPipeline::GraphicsPipeline(
             .stage = vk::ShaderStageFlagBits::eVertex,
             .module = modules[stage],
             .pName = "main",
+            .pSpecializationInfo = key.motion_vectors ? &motion_specialization : nullptr,
         });
     }
     stage = u32(Shader::SwStage::Geometry);
