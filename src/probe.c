@@ -575,15 +575,35 @@ void runtime_restart(void) {
     fflush(NULL);
 #ifdef _WIN32
     /* scripts/run_game.py sets its own command line here; the new process prepares the
-     * patches again. Our GPU device goes away with this process. */
+     * patches again. Our GPU device goes away with this process. Our output is the launcher's
+     * log pipe, which ends with us: the new launcher gets the console window (and only it). */
     const char *command = getenv("BB_RESTART_COMMAND");
     puts("Runtime: restarting through the launcher");
     if (!command) { fputs("runtime_restart: BB_RESTART_COMMAND is not set\n", stderr); _exit(1); }
     char line[32768];
     snprintf(line, sizeof(line), "%s", command);
-    STARTUPINFOA startup = {.cb = sizeof(startup)};
+    STARTUPINFOEXA startup = {.StartupInfo = {.cb = sizeof(startup)}};
+    SECURITY_ATTRIBUTES inheritable = {.nLength = sizeof(inheritable), .bInheritHandle = TRUE};
+    HANDLE console[2] = {
+        CreateFileA("CONIN$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0, NULL),
+        CreateFileA("CONOUT$", GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, &inheritable, OPEN_EXISTING, 0, NULL)};
+    DWORD flags = 0;
+    BOOL inherit = FALSE;
+    SIZE_T list_size = 0;
+    InitializeProcThreadAttributeList(NULL, 1, 0, &list_size);
+    startup.lpAttributeList = HeapAlloc(GetProcessHeap(), 0, list_size);
+    if (console[0] != INVALID_HANDLE_VALUE && console[1] != INVALID_HANDLE_VALUE && startup.lpAttributeList &&
+        InitializeProcThreadAttributeList(startup.lpAttributeList, 1, 0, &list_size) &&
+        UpdateProcThreadAttribute(startup.lpAttributeList, 0, PROC_THREAD_ATTRIBUTE_HANDLE_LIST, console,
+                                  sizeof(console), NULL, NULL)) {
+        startup.StartupInfo.dwFlags = STARTF_USESTDHANDLES;
+        startup.StartupInfo.hStdInput = console[0];
+        startup.StartupInfo.hStdOutput = startup.StartupInfo.hStdError = console[1];
+        flags = EXTENDED_STARTUPINFO_PRESENT;
+        inherit = TRUE;
+    }
     PROCESS_INFORMATION process;
-    if (!CreateProcessA(NULL, line, NULL, NULL, FALSE, 0, NULL, NULL, &startup, &process)) {
+    if (!CreateProcessA(NULL, line, NULL, NULL, inherit, flags, NULL, NULL, &startup.StartupInfo, &process)) {
         fprintf(stderr, "runtime_restart: CreateProcess failed (%lu)\n", GetLastError());
         _exit(1);
     }
@@ -852,6 +872,8 @@ int main(int argc, char **argv) {
     }
     if (!executable_entry) fail("entry is not executable");
     printf("Mapped %" PRIu64 " bytes, %" PRIu64 " segments; applied %" PRIu64 " relocations\n", size, ns, nr);
+    runtime_camera_configure(image, size);
+    runtime_menu_configure(image, size);
     if (native_libc) {
         for (uint64_t m=0;m<module_count;++m) {
             int init_executable=0;

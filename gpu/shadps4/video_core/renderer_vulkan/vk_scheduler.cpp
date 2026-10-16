@@ -186,6 +186,93 @@ std::unique_ptr<RecordChunk> Scheduler::AcquireChunk() {
     return chunk;
 }
 
+bool Scheduler::CheckEnabled() noexcept {
+    static const bool enabled = [] {
+        const char* env = std::getenv("BB_SCHEDULER_CHECK");
+        return env && env[0] == '1';
+    }();
+    return enabled;
+}
+
+namespace {
+/// BB_SCHEDULER_CHECK: UseScope nesting on this thread (CommandBuffer -> SyncRecording -> ...).
+/// Only the threaded scheduler checks, so one counter serves.
+thread_local u32 use_depth = 0;
+
+void DescribeCaller(const void* caller, char* out, size_t size) {
+#ifdef _WIN32
+    BbPlatform::DescribeAddress(caller, out, size);
+#else
+    std::snprintf(out, size, "%p", caller);
+#endif
+}
+} // namespace
+
+void Scheduler::EnterUse(const void* caller) {
+    if (use_depth++ != 0) {
+        return;
+    }
+    const u32 me = BbPlatform::CurrentThreadId();
+    u32 inside = 0;
+    if (use_owner.compare_exchange_strong(inside, me, std::memory_order_acq_rel)) {
+        use_caller.store(caller, std::memory_order_relaxed);
+        use_owner_name.store(BbPlatform::CurrentThreadName(), std::memory_order_relaxed);
+        return;
+    }
+    // Another thread is inside. Each pair of callers is reported once, 32 reports at most.
+    static std::mutex mutex;
+    static std::vector<std::pair<const void*, const void*>> reported;
+    const void* other = use_caller.load(std::memory_order_relaxed);
+    const char* other_name = use_owner_name.load(std::memory_order_relaxed);
+    std::scoped_lock lk{mutex};
+    const std::pair<const void*, const void*> pair{caller, other};
+    if (reported.size() >= 32 || std::ranges::find(reported, pair) != reported.end()) {
+        return;
+    }
+    reported.push_back(pair);
+    char mine_at[192], other_at[192];
+    DescribeCaller(caller, mine_at, sizeof(mine_at));
+    DescribeCaller(other, other_at, sizeof(other_at));
+    std::printf("Scheduler check: thread %u (%s, from %s) entered the recording state while "
+                "thread %u (%s, from %s) is inside\n",
+                me, BbPlatform::CurrentThreadName(), mine_at, inside, other_name ? other_name : "?",
+                other_at);
+}
+
+void Scheduler::LeaveUse() {
+    if (--use_depth != 0) {
+        return;
+    }
+    u32 me = BbPlatform::CurrentThreadId();
+    use_owner.compare_exchange_strong(me, 0, std::memory_order_acq_rel);
+}
+
+void Scheduler::ReplaceMissingChunk(const char* where) {
+    static std::atomic<u32> reports{0};
+    if (reports.fetch_add(1, std::memory_order_relaxed) < 8) {
+        std::printf("Scheduler: %s found no record chunk on thread %s; using a new one "
+                    "(BB_SCHEDULER_CHECK=1 names the thread that took it)\n",
+                    where, BbPlatform::CurrentThreadName());
+    }
+    record_chunk = AcquireChunk();
+}
+
+void* Scheduler::FreshChunkFor(const char* where, size_t bytes, size_t align) {
+    static std::atomic<u32> reports{0};
+    if (reports.fetch_add(1, std::memory_order_relaxed) < 8) {
+        std::printf("Scheduler: %s found no room for %zu bytes on thread %s; using a new chunk "
+                    "(BB_SCHEDULER_CHECK=1 names a thread that changed the recording state)\n",
+                    where, bytes, BbPlatform::CurrentThreadName());
+    }
+    if (record_chunk) {
+        full_chunks.push_back(std::move(record_chunk));
+    }
+    record_chunk = AcquireChunk();
+    void* const dst = record_chunk->Allocate(bytes, align);
+    ASSERT(dst);
+    return dst;
+}
+
 void Scheduler::SignalAfterHostCopies(std::function<void()> signal) {
     if (!IsRecordingDeferred()) {
         WaitHostCopies();
@@ -232,6 +319,7 @@ void Scheduler::WaitHostCopies() {
 }
 
 void Scheduler::KickRecording(bool force) {
+    UseScope use{*this, __builtin_return_address(0)};
     if (!recorder_running) {
         return;
     }
@@ -267,6 +355,7 @@ void Scheduler::KickRecording(bool force) {
 }
 
 void Scheduler::SyncRecording() {
+    UseScope use{*this, __builtin_return_address(0)};
     if (!recorder_running) {
         return;
     }

@@ -30,7 +30,8 @@ public:
     bool IsOpen() const { return is_open.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
     bool PollEvents();
-    /// Keyboard text entry for the system IME dialog; typed text shows in the title bar.
+    /// Keyboard text entry for the system IME dialog: typed text (the system input method's too)
+    /// shows in a box on screen (BbOverlay::SetTextEntry) and in the title bar.
     void BeginTextInput(const std::string& initial, const std::string& prompt);
     /// 0 while typing, 1 confirmed (Enter), 2 cancelled (Escape); text is UTF-8.
     int PollTextInput(std::string& text);
@@ -43,6 +44,7 @@ private:
     int text_state{};
     std::string text, text_prompt, base_title;
     void UpdateTextTitle();
+    bool fullscreen_applied{}; ///< the last fullscreen state asked of SDL (bbport.ini fullscreen)
     SDL_Window* window{};
     WindowSystemInfo window_info{};
 };

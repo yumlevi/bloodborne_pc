@@ -73,6 +73,21 @@ void DescribeAddress(const void* address, char* out, std::size_t size) {
     std::snprintf(out, size, "%p", address);
 }
 
+const char* CurrentThreadName() {
+    thread_local char name[64] = {};
+    if (!name[0]) {
+        PWSTR description = nullptr;
+        if (SUCCEEDED(GetThreadDescription(GetCurrentThread(), &description)) && description) {
+            WideCharToMultiByte(CP_UTF8, 0, description, -1, name, sizeof(name), nullptr, nullptr);
+            LocalFree(description);
+        }
+        if (!name[0]) {
+            std::snprintf(name, sizeof(name), "thread %lu", GetCurrentThreadId());
+        }
+    }
+    return name;
+}
+
 } // namespace BbPlatform
 
 namespace BbThreads {

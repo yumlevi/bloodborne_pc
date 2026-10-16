@@ -9,6 +9,7 @@
 #include <mutex>
 
 #include <SDL3/SDL.h>
+#include "bbport_cursor.h"
 #include "bbport_i18n.h"
 #include "bbport_settings.h"
 #include "imgui.h"
@@ -56,6 +57,12 @@ std::atomic<bool> menu_open{false};
 bool l3_down = false, r3_down = false;
 bool dirty = false; // settings changed while open: saved on close
 float base_scale = 1.0f;
+// The game's text dialog (SetTextEntry), its box as fractions of the screen.
+std::mutex text_entry_mutex;
+bool text_entry_active = false;
+std::string text_entry_prompt, text_entry_text;
+constexpr float TextBoxLeft = 0.25f, TextBoxTop = 0.62f, TextBoxWidth = 0.5f, TextLineTop = 0.035f,
+                TextLineHeight = 0.04f;
 
 // Present rate for the FPS counter.
 std::chrono::steady_clock::time_point last_present{};
@@ -65,7 +72,7 @@ void SetOpen(bool value) {
     if (menu_open.exchange(value) == value) {
         return;
     }
-    ImGui::GetIO().MouseDrawCursor = value;
+    ImGui::GetIO().MouseDrawCursor = value && !BbCursor::Active(); // else the art is the cursor
     if (!value && dirty) {
         dirty = false;
         BbSettings::Save();
@@ -389,7 +396,17 @@ void Menu() {
         }
     }
 
+    ImGui::SeparatorText(Tr("Keyboard and mouse"));
+    Checkbox("Mouse camera (F1 releases the mouse)", s.mouse_camera);
+    Hint("The captured mouse turns the camera directly; the right stick or the camera keys hand "
+         "it back to the game. Bindings, several per control (key_r3=c,mouse_middle,left_alt), "
+         "are the key_* lines of bbport.ini.");
+    Slider("Mouse sensitivity", s.mouse_sensitivity, 0.1f, 5.0f);
+    Checkbox("Invert vertical mouse", s.mouse_invert_y);
+    Slider("Walk (stick push with key_walk, Left Ctrl)", s.walk_stick, 0.1f, 0.9f);
+
     ImGui::SeparatorText(Tr("Other"));
+    Checkbox("Borderless fullscreen (F11)", s.fullscreen);
     Checkbox("FPS counter in the corner", s.show_fps);
     // Each language under its own name, so the switch reads the same in both.
     static const char* languages[] = {"English", "Русский"};
@@ -416,6 +433,31 @@ void Menu() {
     if (!keep_open) {
         SetOpen(false);
     }
+}
+
+void TextEntryBox() {
+    std::string prompt, text;
+    {
+        std::scoped_lock lock{text_entry_mutex};
+        if (!text_entry_active) {
+            return;
+        }
+        prompt = text_entry_prompt;
+        text = text_entry_text;
+    }
+    const ImVec2 size = ImGui::GetIO().DisplaySize;
+    ImGui::SetNextWindowPos(ImVec2(size.x * TextBoxLeft, size.y * TextBoxTop));
+    ImGui::SetNextWindowSize(ImVec2(size.x * TextBoxWidth, 0.0f));
+    ImGui::Begin("##text_entry", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::TextDisabled("%s", prompt.c_str());
+    const bool caret = std::fmod(ImGui::GetTime(), 1.0) < 0.5;
+    ImGui::TextUnformatted((text + (caret ? "_" : " ")).c_str());
+    ImGui::Separator();
+    ImGui::TextDisabled(Tr("Enter: OK    Esc: cancel    The system input method types here too"));
+    ImGui::End();
 }
 
 void FpsCounter() {
@@ -467,6 +509,27 @@ void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) 
     font_config.FontDataOwnedByAtlas = false;
     io.Fonts->AddFontFromMemoryTTF(const_cast<unsigned char*>(bb_font_ttf),
                                    int(bb_font_ttf_end - bb_font_ttf), 18.0f, &font_config);
+    // Text typed into the game's text box may be Chinese, Japanese or Korean: a system font fills
+    // in what DejaVu lacks (merged; its glyphs load as they are drawn), when one is installed.
+    std::string windows = std::getenv("WINDIR") ? std::getenv("WINDIR") : "C:\\Windows";
+    const std::string cjk_fonts[] = {
+        windows + "\\Fonts\\msyh.ttc",
+        windows + "\\Fonts\\simsun.ttc",
+        windows + "\\Fonts\\YuGothM.ttc",
+        windows + "\\Fonts\\malgun.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/google-noto-cjk/NotoSansCJK-Regular.ttc",
+    };
+    for (const std::string& path : cjk_fonts) {
+        if (std::FILE* file = std::fopen(path.c_str(), "rb")) {
+            std::fclose(file);
+            ImFontConfig merge;
+            merge.MergeMode = true;
+            io.Fonts->AddFontFromFileTTF(path.c_str(), 18.0f, &merge);
+            break;
+        }
+    }
 
     const vk::Instance vk_instance = instance.GetInstance();
     ImGui_ImplVulkan_LoadFunctions(
@@ -609,11 +672,24 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || BbSettings::Get().show_fps);
+    std::scoped_lock lock{text_entry_mutex};
+    return initialized && (menu_open || BbSettings::Get().show_fps || text_entry_active);
 }
 
 bool CapturesInput() {
     return menu_open;
+}
+
+void SetTextEntry(bool active, const std::string& prompt, const std::string& text) {
+    std::scoped_lock lock{text_entry_mutex};
+    text_entry_active = active;
+    text_entry_prompt = prompt;
+    text_entry_text = text;
+}
+
+SDL_Rect TextEntryArea(int window_w, int window_h) {
+    return SDL_Rect{int(window_w * TextBoxLeft), int(window_h * (TextBoxTop + TextLineTop)),
+                    int(window_w * TextBoxWidth), int(window_h * TextLineHeight)};
 }
 
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
@@ -648,6 +724,7 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     if (BbSettings::Get().show_fps && !menu_open) {
         FpsCounter();
     }
+    TextEntryBox();
     ImGui::Render();
 
     const vk::RenderingAttachmentInfo attachment{

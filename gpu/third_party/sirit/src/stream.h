@@ -11,6 +11,7 @@
 #include <cassert>
 #include <concepts>
 #include <cstddef>
+#include <cstdlib> // bbport: std::abort (libc++ 23 no longer includes it transitively)
 #include <functional>
 #include <string_view>
 #include <unordered_map>

@@ -5,6 +5,26 @@
 
 static int capture;
 int bbgpu_overlay_captures_input(void) { return capture; }
+static BbGpuKeyboardMouse keyboard;
+static int camera_stick=-1;
+static float camera_dx;
+void bbgpu_keyboard_mouse(BbGpuKeyboardMouse *state) { *state=keyboard; keyboard.mouse_dx=keyboard.mouse_dy=0; }
+static unsigned menu_probes, menu_traces;
+static uint32_t menu_buttons;
+static uint32_t menu_adds;
+uint32_t runtime_menu_update(unsigned probe_requests, unsigned trace_requests, float pointer_x, float pointer_y,
+                             int window_w, int window_h, uint32_t free_buttons, uint32_t buttons, uint8_t left_x,
+                             uint8_t left_y) {
+    (void)pointer_x; (void)pointer_y; (void)window_w; (void)window_h; (void)free_buttons; (void)left_x; (void)left_y;
+    menu_probes=probe_requests; menu_traces=trace_requests; menu_buttons=buttons;
+    return menu_adds;
+}
+void runtime_camera_update(float dx, float dy, int captured, float sensitivity, int invert_y, int stick_camera) {
+    (void)dy; (void)captured; (void)sensitivity; (void)invert_y;
+    camera_dx=dx; camera_stick=stick_camera;
+}
+static int ime_open;
+int runtime_ime_active(void) { return ime_open; }
 uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *name) {
     (void)table; (void)count; (void)name;
     return 0;
@@ -38,6 +58,47 @@ int main(void) {
     assert(pad_read_state(1,&data)==0 && data.touch_count==1 && data.touches[0].x==1440);
     inject(path,"");
     assert(pad_read_state(1,&data)==0 && data.buttons==0 && data.touch_count==0);
+    /* Keyboard and mouse: bindings add buttons and replace a stick; the mouse turns the camera
+     * until the right stick is used. */
+    keyboard.held=(1u<<BBGPU_PAD_R3)|(1u<<BBGPU_PAD_L2)|(1u<<BBGPU_PAD_MOVE_UP)|(1u<<BBGPU_PAD_MOVE_RIGHT);
+    keyboard.mouse_dx=12.0f;
+    keyboard.captured=1;
+    assert(pad_read_state(1,&data)==0);
+    assert((data.buttons & (BTN_R3|BTN_L2))==(BTN_R3|BTN_L2) && data.l2==255);
+    assert(data.left_x==255 && data.left_y==0 && data.right_x==128);
+    assert(camera_dx==12.0f && camera_stick==0);
+    keyboard.held=1u<<BBGPU_PAD_CAMERA_LEFT;
+    assert(pad_read_state(1,&data)==0 && data.right_x==0 && camera_stick==1);
+    /* Walking: the movement keys push the stick walk_scale far, diagonals to the same length. */
+    keyboard.held=(1u<<BBGPU_PAD_MOVE_UP)|(1u<<BBGPU_PAD_WALK);
+    keyboard.walk_scale=0.4f;
+    assert(pad_read_state(1,&data)==0 && data.left_x==128 && data.left_y==128-51);
+    keyboard.held|=1u<<BBGPU_PAD_MOVE_RIGHT;
+    assert(pad_read_state(1,&data)==0 && data.left_x==128+36 && data.left_y==128-36);
+    memset(&keyboard,0,sizeof(keyboard));
+    assert(pad_read_state(1,&data)==0 && data.buttons==0 && data.right_x==128 && menu_probes==0);
+    /* The menu probe and trace see the F7/F8 presses and the buttons the pad reports. */
+    keyboard.probe_requests=1;
+    keyboard.trace_requests=2;
+    keyboard.held=1u<<BBGPU_PAD_DPAD_DOWN;
+    assert(pad_read_state(1,&data)==0 && menu_probes==1 && menu_traces==2 && menu_buttons==BTN_DOWN);
+    keyboard.held=0;
+    /* The buttons the mouse adds in a menu reach the game. */
+    menu_adds=BTN_CIRCLE;
+    assert(pad_read_state(1,&data)==0 && (data.buttons & BTN_CIRCLE));
+    menu_adds=0;
+    /* The game's text dialog: neutral input while it is open, then the press that confirmed the
+     * text is held back until every button is up. */
+    keyboard.held=1u<<BBGPU_PAD_CROSS;
+    ime_open=1;
+    assert(pad_read_state(1,&data)==0 && data.buttons==0);
+    ime_open=0;
+    assert(pad_read_state(1,&data)==0 && data.buttons==0);
+    keyboard.held=0;
+    assert(pad_read_state(1,&data)==0 && data.buttons==0);
+    keyboard.held=1u<<BBGPU_PAD_CROSS;
+    assert(pad_read_state(1,&data)==0 && (data.buttons & BTN_CROSS));
+    keyboard.held=0;
 
     SDL_VirtualJoystickTouchpadDesc touch={.nfingers=2};
     SDL_VirtualJoystickDesc desc;
@@ -79,5 +140,6 @@ int main(void) {
     assert(SDL_DetachVirtualJoystick(id));
     SDL_Quit();
     unlink(path);
-    puts("PASS: pad ABI, debug camera chord, left/right clicks, SDL touch coordinates, overlay capture");
+    puts("PASS: pad ABI, debug camera chord, left/right clicks, keyboard and mouse bindings, text dialog, "
+         "SDL touch coordinates, overlay capture");
 }

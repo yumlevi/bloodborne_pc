@@ -33,6 +33,8 @@ int ThreadCpuClock();
 std::uint64_t ReadThreadCpuClockNs(int clock);
 /// "module+0xoffset" for a code address (diagnostics).
 void DescribeAddress(const void* address, char* out, std::size_t size);
+/// The calling thread's name (diagnostics); valid while the thread lives.
+const char* CurrentThreadName();
 #else
 inline bool GetUsage(bool thread, Usage& out) {
     rusage usage{};
@@ -63,6 +65,14 @@ inline std::uint64_t ReadThreadCpuClockNs(int clock) {
     timespec ts{};
     clock_gettime(static_cast<clockid_t>(clock), &ts);
     return std::uint64_t(ts.tv_sec) * 1000000000ull + std::uint64_t(ts.tv_nsec);
+}
+
+inline const char* CurrentThreadName() {
+    thread_local char name[64] = {};
+    if (!name[0] && pthread_getname_np(pthread_self(), name, sizeof(name)) != 0) {
+        name[0] = '?';
+    }
+    return name;
 }
 #endif
 

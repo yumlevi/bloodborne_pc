@@ -711,14 +711,19 @@ Frame* Presenter::GetRenderFrame() {
 }
 
 void Presenter::SetExpectedGameSize(s32 width, s32 height) {
+    // bbport: a minimized window has a 0x0 swapchain extent; frames keep their size (a 0x0 frame
+    // image cannot be created: RecreateFrame failed with ErrorInitializationFailed).
+    if (width <= 0 || height <= 0) {
+        return;
+    }
     const float ratio = (float)width / (float)height;
 
     expected_frame_height = height;
     expected_frame_width = width;
     if (ratio > expected_ratio) {
-        expected_frame_width = static_cast<s32>(height * expected_ratio);
+        expected_frame_width = std::max(static_cast<s32>(height * expected_ratio), 1);
     } else {
-        expected_frame_height = static_cast<s32>(width / expected_ratio);
+        expected_frame_height = std::max(static_cast<s32>(width / expected_ratio), 1);
     }
 }
 

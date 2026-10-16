@@ -123,6 +123,24 @@ constexpr Pair kRussian[] = {
      "Изменения применятся после перезапуска игры"},
     {"Apply and restart the game",
      "Применить и перезапустить игру"},
+    {"Keyboard and mouse",
+     "Клавиатура и мышь"},
+    {"Mouse camera (F1 releases the mouse)",
+     "Камера мышью (F1 освобождает мышь)"},
+    {"The captured mouse turns the camera directly; the right stick or the camera keys hand "
+     "it back to the game. Bindings, several per control (key_r3=c,mouse_middle,left_alt), "
+     "are the key_* lines of bbport.ini.",
+     "Захваченная мышь поворачивает камеру напрямую; правый стик или клавиши камеры "
+     "возвращают её игре. Назначения, по несколько на кнопку (key_r3=c,mouse_middle,left_alt), "
+     "задаются строками key_* в bbport.ini."},
+    {"Mouse sensitivity",
+     "Чувствительность мыши"},
+    {"Invert vertical mouse",
+     "Инвертировать мышь по вертикали"},
+    {"Walk (stick push with key_walk, Left Ctrl)",
+     "Шаг (наклон стика с key_walk, левый Ctrl)"},
+    {"Borderless fullscreen (F11)",
+     "Полноэкранное окно без рамки (F11)"},
     {"Other",
      "Прочее"},
     {"FPS counter in the corner",
@@ -223,6 +241,8 @@ constexpr Pair kRussian[] = {
      "Только при выводе 1920 x 1080 (просмотр маски — часть этого пути)."},
     {"Menu language",
      "Язык меню"},
+    {"Enter: OK    Esc: cancel    The system input method types here too",
+     "Enter: OK    Esc: отмена    Системный способ ввода тоже печатает здесь"},
     {"The language of this menu. The game's own language is set by the launcher "
      "(BB_LANGUAGE).",
      "Язык этого меню. Язык самой игры задаёт лаунчер (BB_LANGUAGE)."},

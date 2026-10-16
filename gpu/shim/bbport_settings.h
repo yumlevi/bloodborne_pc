@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <string>
 
 namespace BbSettings {
 
@@ -45,6 +46,14 @@ inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
 inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
 inline constexpr int OutputCount = 4;
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
+/// Keyboard and mouse bindings (bbport_input.h): the bbport.ini keys, in BBGPU_PAD_* order.
+inline constexpr const char* BindingKeys[] = {
+    "key_cross", "key_circle", "key_square", "key_triangle", "key_l1", "key_r1", "key_l2",
+    "key_r2", "key_l3", "key_r3", "key_options", "key_dpad_up", "key_dpad_down",
+    "key_dpad_left", "key_dpad_right", "key_touchpad_left", "key_touchpad_right",
+    "key_move_up", "key_move_down", "key_move_left", "key_move_right",
+    "key_camera_up", "key_camera_down", "key_camera_left", "key_camera_right", "key_walk"};
+inline constexpr int BindingCount = int(sizeof(BindingKeys) / sizeof(BindingKeys[0]));
 
 /// The settings. Load() sets every one from scripts/bbport_settings_table.inc before reading
 /// bbport.ini; the initial values here only cover the time before that.
@@ -76,6 +85,16 @@ struct Values {
     /// Live resolution and preset changes (run.sh): 0 off by default (startup patch, fastest
     /// on the Steam Deck and older GPUs), -1 auto (strong discrete GPUs), 1 on. On restart.
     std::atomic<int> live_resolution{0};
+    /// The captured mouse turns the camera (runtime_camera.c); F1 releases it.
+    std::atomic<bool> mouse_camera{true};
+    std::atomic<float> mouse_sensitivity{1.0f}; ///< 1.0: 0.001 radian per mouse count
+    std::atomic<bool> mouse_invert_y{false};
+    /// Left stick deflection (0..1) of the movement keys while key_walk is held: walking.
+    std::atomic<float> walk_stick{0.4f};
+    /// key_* bindings as bbport.ini has them; set by Load() only, parsed by bbport_input.
+    std::string bindings[BindingCount];
+    /// The confirm button (auto, circle or cross), read by run_game.py; kept by Save().
+    std::string enter_button{"auto"};
     /// Why FSR 4 cannot run (assets, device features), or null. Set by the renderer.
     std::atomic<const char*> fsr4_problem{nullptr};
     std::atomic<bool> fsr4_supported{false}, fsr411_supported{false}, dlss_supported{false};

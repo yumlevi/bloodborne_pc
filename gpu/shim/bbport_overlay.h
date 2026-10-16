@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <string>
+#include <SDL3/SDL_rect.h>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -33,5 +35,12 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 
 /// The menu is open: the game's input is held neutral.
 bool CapturesInput();
+
+/// The game's text dialog (sceImeDialog), typed on the keyboard: a box low in the middle of the
+/// screen shows the prompt and the text while it is open (window thread, at every change).
+void SetTextEntry(bool active, const std::string& prompt, const std::string& text);
+/// Where that box's text line is, in window points: the system input method's windows (the
+/// composition, the candidates) open there.
+SDL_Rect TextEntryArea(int window_w, int window_h);
 
 } // namespace BbOverlay

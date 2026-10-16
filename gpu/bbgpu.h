@@ -33,6 +33,36 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* Keyboard and mouse: the pad controls, in the order of bbport.ini's key_* bindings. */
+enum {
+    BBGPU_PAD_CROSS, BBGPU_PAD_CIRCLE, BBGPU_PAD_SQUARE, BBGPU_PAD_TRIANGLE,
+    BBGPU_PAD_L1, BBGPU_PAD_R1, BBGPU_PAD_L2, BBGPU_PAD_R2, BBGPU_PAD_L3, BBGPU_PAD_R3,
+    BBGPU_PAD_OPTIONS, BBGPU_PAD_DPAD_UP, BBGPU_PAD_DPAD_DOWN, BBGPU_PAD_DPAD_LEFT,
+    BBGPU_PAD_DPAD_RIGHT, BBGPU_PAD_TOUCHPAD_LEFT, BBGPU_PAD_TOUCHPAD_RIGHT,
+    BBGPU_PAD_MOVE_UP, BBGPU_PAD_MOVE_DOWN, BBGPU_PAD_MOVE_LEFT, BBGPU_PAD_MOVE_RIGHT,
+    BBGPU_PAD_CAMERA_UP, BBGPU_PAD_CAMERA_DOWN, BBGPU_PAD_CAMERA_LEFT, BBGPU_PAD_CAMERA_RIGHT,
+    BBGPU_PAD_WALK, /* not a pad control: the movement keys push the stick only walk_scale far */
+    BBGPU_PAD_CONTROL_COUNT
+};
+typedef struct {
+    uint32_t held;            /* 1u << BBGPU_PAD_* for each control a binding holds */
+    float mouse_dx, mouse_dy; /* mouse motion (counts) since the last call, while captured */
+    int captured;             /* the mouse is captured for the camera (relative mode) */
+    float sensitivity;        /* camera radians per mouse count */
+    int invert_y;
+    float walk_scale;         /* left stick deflection of the movement keys while walking */
+    uint32_t probe_requests;  /* F7 presses so far (menu memory probe, runtime_menu.c) */
+    uint32_t trace_requests;  /* F8 presses so far (menu call trace, runtime_menu.c) */
+    float pointer_x, pointer_y; /* the free cursor in the window (points) */
+    int window_w, window_h;   /* the window's size (points) */
+    uint32_t free_buttons;    /* mouse buttons held while the mouse is free (bit SDL button - 1) */
+} BbGpuKeyboardMouse;
+/* Samples the keyboard and mouse bindings and takes the mouse motion (the pad thread). */
+void bbgpu_keyboard_mouse(BbGpuKeyboardMouse *state);
+/* The game shows a menu the mouse points into (runtime_menu.c): the window frees the mouse, and
+ * the wheel and the other mouse buttons keep their bindings; left and right go to the menu.
+ * x, y >= 0 (window points): the pointer is put there first, on the selected item. */
+void bbgpu_menu_active(int active, float x, float y);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 #ifdef __cplusplus

@@ -714,6 +714,7 @@ public:
     /// records directly (Record() included, so callers may mix both) until the next
     /// KickRecording() or submission.
     [[gnu::noinline]] vk::CommandBuffer CommandBuffer() {
+        UseScope use{*this, __builtin_return_address(0)};
         if (recorder_running && !direct_mode) {
             SyncRecording();
             direct_mode = true;
@@ -726,10 +727,36 @@ public:
     /// BB_RECORDER_TRACE=1: prints the most frequent CommandBuffer() callers every 2000 calls.
     static void TraceDirectRecording(void* caller);
 
+    /// bbport: the recording state (record_chunk, full_chunks, direct_mode) belongs to one thread
+    /// at a time: the draw recording thread (stage B), or the GPU command thread once it has
+    /// drained stage B. BB_SCHEDULER_CHECK=1 reports a thread entering it while another is
+    /// inside, with both callers (addresses in bb-probe.exe for llvm-symbolizer).
+    class UseScope {
+    public:
+        UseScope(Scheduler& scheduler, const void* caller) noexcept
+            : owner{scheduler.recorder_running && CheckEnabled() ? &scheduler : nullptr} {
+            if (owner) {
+                owner->EnterUse(caller);
+            }
+        }
+        ~UseScope() {
+            if (owner) {
+                owner->LeaveUse();
+            }
+        }
+        UseScope(const UseScope&) = delete;
+        UseScope& operator=(const UseScope&) = delete;
+
+    private:
+        Scheduler* owner;
+    };
+    static bool CheckEnabled() noexcept;
+
     /// Records `func(vk::CommandBuffer)` in order with other commands. The closure must own
     /// everything it uses (capture by value): it may run later on the recording thread.
     template <typename Func>
     void Record(Func&& func) {
+        UseScope use{*this, __builtin_return_address(0)};
         if (!recorder_running || direct_mode) {
             func(current_cmdbuf);
             return;
@@ -739,6 +766,9 @@ public:
             direct_mode = true;
             func(current_cmdbuf);
             return;
+        }
+        if (!record_chunk) [[unlikely]] {
+            ReplaceMissingChunk("Record");
         }
         if (!record_chunk->Push(std::forward<Func>(func))) {
             full_chunks.push_back(std::move(record_chunk));
@@ -757,10 +787,14 @@ public:
     /// Makes room for `bytes` of RecordData() plus the command that uses them in the current
     /// chunk: data and command must share a chunk, which is recycled once executed.
     void ReserveRecordData(size_t bytes) {
+        UseScope use{*this, __builtin_return_address(0)};
         if (!IsRecordingDeferred()) {
             return;
         }
         ASSERT(bytes + 1024 <= RecordChunk::Capacity);
+        if (!record_chunk) [[unlikely]] {
+            ReplaceMissingChunk("ReserveRecordData");
+        }
         if (RecordChunk::Capacity - record_chunk->Size() < bytes + 1024) {
             full_chunks.push_back(std::move(record_chunk));
             record_chunk = AcquireChunk();
@@ -771,6 +805,7 @@ public:
     /// been recorded (the same chunk). With threaded recording off, returns `data` itself.
     template <typename T>
     std::span<const T> RecordData(std::span<const T> data) {
+        UseScope use{*this, __builtin_return_address(0)};
         if (!IsRecordingDeferred() || data.empty()) {
             return data;
         }
@@ -778,6 +813,11 @@ public:
         const size_t bytes = data.size_bytes();
         ReserveRecordData(bytes + alignof(T));
         auto* dst = static_cast<T*>(record_chunk->Allocate(bytes, alignof(T)));
+        if (!dst) [[unlikely]] {
+            // The reservation did not hold (the recording state changed under this thread):
+            // a fresh chunk instead of a copy to address 0.
+            dst = static_cast<T*>(FreshChunkFor("RecordData", bytes, alignof(T)));
+        }
         std::memcpy(dst, data.data(), bytes);
         return {dst, data.size()};
     }
@@ -914,6 +954,16 @@ private:
     std::atomic<size_t> queued_chunks{0}; ///< recorder_queue.size() for lock-free polling
     bool recorder_sleeping = false; ///< waiting on recorder_cv (guarded by recorder_mutex)
     bool direct_mode = false; ///< the command buffer is recorded on the caller's thread
+    /// BB_SCHEDULER_CHECK: the thread inside the recording state (OS id; 0: none), its caller.
+    std::atomic<u32> use_owner{0};
+    std::atomic<const void*> use_caller{nullptr};
+    std::atomic<const char*> use_owner_name{nullptr};
+    void EnterUse(const void* caller);
+    void LeaveUse();
+    /// record_chunk was null where it cannot be: reported (first times), then replaced.
+    void ReplaceMissingChunk(const char* where);
+    /// A chunk with room for `bytes`, after RecordData's reservation did not hold (reported).
+    void* FreshChunkFor(const char* where, size_t bytes, size_t align);
     u64 host_copies_issued = 0;
     std::atomic<u64> host_copies_done{0};
     std::atomic<u64> deferred_signals_issued{0}; ///< by the thread recording (A or B)

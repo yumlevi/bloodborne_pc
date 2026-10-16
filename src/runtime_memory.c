@@ -649,6 +649,17 @@ void runtime_memory_read_backing(uintptr_t address, void *data, uint64_t size) {
     }
     read_unlock();
 }
+/* The mapped guest ranges (not reservations) and their bytes in the backing view, which stays
+ * mapped and readable: a range unmapped meanwhile reads as zero or reused data (menu probe). */
+size_t runtime_memory_views(RuntimeView *out, size_t max) {
+    read_lock();
+    size_t n=0;
+    for (size_t i=0;i<vma_count && n<max;++i)
+        if (vmas[i].kind!=KIND_RESERVED)
+            out[n++]=(RuntimeView){vmas[i].start,vmas[i].end-vmas[i].start,backing_base+vmas[i].phys,vmas[i].type};
+    read_unlock();
+    return n;
+}
 /* Per-thread cache of recently found regions for the GPU's per-draw queries:
  * entries hold for as long as the table generation they were read at. */
 typedef struct { uint64_t generation; uintptr_t start, end; int kind; } CachedRegion;

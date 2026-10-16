@@ -70,10 +70,27 @@ void Set(Values& v, const std::string& key, const std::string& value) {
                 v.output_res = r;
             }
         }
+    } else if (key == "mouse_camera") {
+        v.mouse_camera = i != 0;
+    } else if (key == "mouse_sensitivity") {
+        v.mouse_sensitivity = Clamp(f, 0.05f, 10.0f);
+    } else if (key == "mouse_invert_y") {
+        v.mouse_invert_y = i != 0;
+    } else if (key == "walk_stick") {
+        v.walk_stick = Clamp(f, 0.1f, 0.9f);
+    } else if (key == "enter_button") {
+        if (value == "auto" || value == "circle" || value == "cross") {
+            v.enter_button = value;
+        }
     } else {
         for (int e = 0; e < EffectCount; ++e) {
             if (key == Effects[e].key) {
                 v.effects[e] = i != 0;
+            }
+        }
+        for (int b = 0; b < BindingCount; ++b) {
+            if (key == BindingKeys[b]) {
+                v.bindings[b] = value;
             }
         }
     }
@@ -204,8 +221,14 @@ void Save() {
     std::fprintf(file, "model_lod=%d\noutput_res=%dx%d\nfullscreen=%d\n", v.model_lod.load(),
                  OutputWidths[v.output_res], OutputHeights[v.output_res], int(v.fullscreen.load()));
     // Read by run.sh at start.
-    std::fprintf(file, "live_resolution=%s\n", v.live_resolution < 0 ? "auto"
-                                                  : v.live_resolution ? "1" : "0");
+    std::fprintf(file, "live_resolution=%s\nenter_button=%s\n", v.live_resolution < 0 ? "auto"
+                                                  : v.live_resolution ? "1" : "0", v.enter_button.c_str());
+    std::fprintf(file, "mouse_camera=%d\nmouse_sensitivity=%.2f\nmouse_invert_y=%d\nwalk_stick=%.2f\n",
+                 int(v.mouse_camera.load()), v.mouse_sensitivity.load(), int(v.mouse_invert_y.load()),
+                 v.walk_stick.load());
+    for (int b = 0; b < BindingCount; ++b) {
+        std::fprintf(file, "%s=%s\n", BindingKeys[b], v.bindings[b].c_str());
+    }
     std::fclose(file);
 }
 

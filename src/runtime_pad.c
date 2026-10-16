@@ -1,11 +1,16 @@
-/* libScePad on SDL3 gamepads, with a keyboard fallback. SDL events are pumped
+/* libScePad on SDL3 gamepads, with keyboard and mouse. SDL events are pumped
  * by the window thread (gpu/shim/window.cpp); here state is only sampled.
  *
- * Keyboard layout (when no gamepad is connected):
+ * Keyboard and mouse (with or without a gamepad): bbport.ini key_* bindings
+ * (gpu/shim/bbport_input.h). The default layout:
  *   WASD left stick, arrow keys right stick, Space Cross, LShift Circle,
- *   E Square, Q Triangle, 1 L1, 3 R1, R L2, F R2, Z L3, C R3,
+ *   E Square, Q Triangle, 1 L1, 3 or left button R1, R or right button L2,
+ *   F or Shift+left button R2, Z L3, C, middle button or LAlt R3,
  *   Enter Options, Tab left touchpad, Backspace right touchpad,
- *   IJKL d-pad (I up, K down, J left, L right). */
+ *   IJKL d-pad (I up, K down, J left, L right), LCtrl walk (WASD push the stick
+ *   walk_stick far).
+ * The captured mouse turns the camera (runtime_camera.c; F1 releases it).
+ * F7 and F8 run the menu probe and trace (runtime_menu.c, BB_MENU_PROBE=1). */
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "gpu/bbgpu.h"
@@ -88,6 +93,44 @@ static SDL_Gamepad *current_gamepad(void) {
     }
     return gamepad;
 }
+/* Keys for a stick's up, down, left and right (consecutive controls) replace it while held:
+ * fully, or `scale` far (walking), diagonals scaled to the same length. */
+static void key_stick(uint32_t held, int up, uint8_t *x, uint8_t *y, float scale) {
+    const int u=(held>>up)&1, down=(held>>(up+1))&1, left=(held>>(up+2))&1, right=(held>>(up+3))&1;
+    if (!(u|down|left|right)) return;
+    const int dx=right-left, dy=down-u;
+    if (scale>=1.0f) {
+        *x=(uint8_t)(128-(left ? 128 : 0)+(right ? 127 : 0));
+        *y=(uint8_t)(128-(u ? 128 : 0)+(down ? 127 : 0));
+        return;
+    }
+    const float length=(dx && dy) ? scale*0.70710678f : scale;
+    const int offset=(int)(length*127.0f+0.5f);
+    *x=(uint8_t)(128+dx*offset);
+    *y=(uint8_t)(128+dy*offset);
+}
+/* Held controls add their buttons, keys pushing a stick replace that stick, and the captured
+ * mouse turns the camera until a right stick (the pad's or the camera keys) is used. */
+static void keyboard_mouse(PadData *d) {
+    BbGpuKeyboardMouse kbm;
+    memset(&kbm,0,sizeof(kbm));
+    if (SDL_WasInit(SDL_INIT_VIDEO)) bbgpu_keyboard_mouse(&kbm);
+    static const uint32_t buttons[]={BTN_CROSS,BTN_CIRCLE,BTN_SQUARE,BTN_TRIANGLE,BTN_L1,BTN_R1,
+        BTN_L2,BTN_R2,BTN_L3,BTN_R3,BTN_OPTIONS,BTN_UP,BTN_DOWN,BTN_LEFT,BTN_RIGHT};
+    _Static_assert(sizeof(buttons)/sizeof(*buttons)==BBGPU_PAD_DPAD_RIGHT+1,"BBGPU_PAD_* buttons");
+    for (int i=0;i<=BBGPU_PAD_DPAD_RIGHT;++i) if (kbm.held & (1u<<i)) d->buttons|=buttons[i];
+    if (kbm.held & (1u<<BBGPU_PAD_TOUCHPAD_LEFT)) touch_click(d,0);
+    if (kbm.held & (1u<<BBGPU_PAD_TOUCHPAD_RIGHT)) touch_click(d,1);
+    if (kbm.held & (1u<<BBGPU_PAD_L2)) d->l2=255;
+    if (kbm.held & (1u<<BBGPU_PAD_R2)) d->r2=255;
+    const int walking=(kbm.held>>BBGPU_PAD_WALK)&1;
+    key_stick(kbm.held,BBGPU_PAD_MOVE_UP,&d->left_x,&d->left_y,walking ? kbm.walk_scale : 1.0f);
+    key_stick(kbm.held,BBGPU_PAD_CAMERA_UP,&d->right_x,&d->right_y,1.0f);
+    const int stick_camera=abs(d->right_x-128)>48 || abs(d->right_y-128)>48;
+    runtime_camera_update(kbm.mouse_dx,kbm.mouse_dy,kbm.captured,kbm.sensitivity,kbm.invert_y,stick_camera);
+    d->buttons|=runtime_menu_update(kbm.probe_requests,kbm.trace_requests,kbm.pointer_x,kbm.pointer_y,kbm.window_w,
+                                    kbm.window_h,kbm.free_buttons,d->buttons,d->left_x,d->left_y);
+}
 static void sample_host(PadData *d) {
     memset(d,0,sizeof(*d));
     d->left_x=d->left_y=d->right_x=d->right_y=128;
@@ -96,7 +139,12 @@ static void sample_host(PadData *d) {
     d->timestamp=now_us();
     SDL_Gamepad *g=current_gamepad();
     if (bbgpu_overlay_captures_input()) return; /* settings menu open: neutral input */
-    const bool *k=SDL_WasInit(SDL_INIT_VIDEO) ? SDL_GetKeyboardState(NULL) : NULL;
+    /* The game's text dialog open: neutral input, as on the console, where the dialog has the
+     * pad; then until every button is up (the press that confirmed the text is no new one). A
+     * text field's row queues a dialog for each confirm press, four at most: a fifth, a click
+     * or a key while one is open, stopped the game ("out of memory"). */
+    static int ime_held;
+    if (runtime_ime_active()) { ime_held=1; return; }
     if (g) {
         static const struct { SDL_GamepadButton sdl; uint32_t ps; } map[]={
             {SDL_GAMEPAD_BUTTON_SOUTH,BTN_CROSS}, {SDL_GAMEPAD_BUTTON_EAST,BTN_CIRCLE},
@@ -127,27 +175,12 @@ static void sample_host(PadData *d) {
         }
         // Back/Select on pads without a touch surface is a left-side click.
         if ((d->buttons & BTN_TOUCHPAD) && !d->touch_count) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_TAB]) touch_click(d,0);
-        if (k && k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-        return;
     }
-    if (!k) return;
-    static const struct { SDL_Scancode key; uint32_t ps; } keys[]={
-        {SDL_SCANCODE_SPACE,BTN_CROSS}, {SDL_SCANCODE_LSHIFT,BTN_CIRCLE}, {SDL_SCANCODE_E,BTN_SQUARE},
-        {SDL_SCANCODE_Q,BTN_TRIANGLE}, {SDL_SCANCODE_1,BTN_L1}, {SDL_SCANCODE_3,BTN_R1},
-        {SDL_SCANCODE_R,BTN_L2}, {SDL_SCANCODE_F,BTN_R2}, {SDL_SCANCODE_Z,BTN_L3}, {SDL_SCANCODE_C,BTN_R3},
-        {SDL_SCANCODE_RETURN,BTN_OPTIONS},
-        {SDL_SCANCODE_I,BTN_UP}, {SDL_SCANCODE_K,BTN_DOWN}, {SDL_SCANCODE_J,BTN_LEFT}, {SDL_SCANCODE_L,BTN_RIGHT},
-    };
-    for (size_t i=0;i<sizeof(keys)/sizeof(*keys);++i) if (k[keys[i].key]) d->buttons|=keys[i].ps;
-    if (k[SDL_SCANCODE_TAB]) touch_click(d,0);
-    if (k[SDL_SCANCODE_BACKSPACE]) touch_click(d,1);
-    if (d->buttons & BTN_L2) d->l2=255;
-    if (d->buttons & BTN_R2) d->r2=255;
-    d->left_x=(uint8_t)(128-(k[SDL_SCANCODE_A] ? 128 : 0)+(k[SDL_SCANCODE_D] ? 127 : 0));
-    d->left_y=(uint8_t)(128-(k[SDL_SCANCODE_W] ? 128 : 0)+(k[SDL_SCANCODE_S] ? 127 : 0));
-    d->right_x=(uint8_t)(128-(k[SDL_SCANCODE_LEFT] ? 128 : 0)+(k[SDL_SCANCODE_RIGHT] ? 127 : 0));
-    d->right_y=(uint8_t)(128-(k[SDL_SCANCODE_UP] ? 128 : 0)+(k[SDL_SCANCODE_DOWN] ? 127 : 0));
+    keyboard_mouse(d);
+    if (ime_held && (d->buttons || d->l2 || d->r2)) {
+        d->buttons=0; d->l2=d->r2=0; d->touch_count=0;
+        d->left_x=d->left_y=d->right_x=d->right_y=128;
+    } else ime_held=0;
 }
 
 /* BB_PAD_FILE=<file>: scripted input for automated runs. The file holds whitespace-separated

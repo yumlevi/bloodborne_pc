@@ -102,14 +102,14 @@ set(FFX_VK_PORTABLE_BUILD_PROBE OFF CACHE BOOL "" FORCE)
 add_subdirectory(third_party/fsr-vulkan EXCLUDE_FROM_ALL)
 if (WIN32)
     # AMD's FidelityFX sources rely on MSVC's transitive includes (memset, floor, placement new,
-    # swprintf_s) on _WIN32.
+    # swprintf_s, _countof: libc++ 23 no longer includes stdlib.h transitively) on _WIN32.
     foreach(ffx_target IN ITEMS ffx_vulkan_portable ffx_vulkan_fsr3_vk_backend_1_1_4
             ffx_vulkan_fsr3_host_1_1_4 ffx_vulkan_fsr4_v07_vulkan ffx_vulkan_fsr4_v07_assets)
         if (TARGET ${ffx_target})
             target_compile_options(${ffx_target} PRIVATE "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstdio>"
                 "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cwchar>" "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstring>"
                 "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cmath>" "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include new>"
-                "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include mutex>")
+                "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include mutex>" "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstdlib>")
         endif()
     endforeach()
 endif()

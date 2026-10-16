@@ -5,6 +5,8 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "sdl_window.h"
+#include "bbport_cursor.h"
+#include "bbport_input.h"
 #include "bbport_overlay.h"
 #include "bbport_settings.h"
 
@@ -23,9 +25,12 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title) : width{width_}
     SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height_);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
     SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_VULKAN_BOOLEAN, true);
-    const char* fullscreen = std::getenv("BB_FULLSCREEN");
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN,
-                           fullscreen ? fullscreen[0] == '1' : BbSettings::Get().fullscreen.load());
+    // BB_FULLSCREEN overrides bbport.ini for this run; F11 and the menu change the setting.
+    if (const char* fullscreen = std::getenv("BB_FULLSCREEN")) {
+        BbSettings::Get().fullscreen = fullscreen[0] == '1';
+    }
+    fullscreen_applied = BbSettings::Get().fullscreen;
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_FULLSCREEN_BOOLEAN, fullscreen_applied);
     base_title = title;
     window = SDL_CreateWindowWithProperties(props);
     SDL_DestroyProperties(props);
@@ -79,6 +84,7 @@ void WindowSDL::UpdateTextTitle() {
     const std::string title = text_active ? base_title + " \u2014 " + text_prompt + ": " + text + "_  (Enter = OK, Esc = cancel)"
                                           : base_title;
     SDL_SetWindowTitle(window, title.c_str());
+    BbOverlay::SetTextEntry(text_active, text_prompt, text);
 }
 
 bool WindowSDL::PollEvents() {
@@ -87,6 +93,10 @@ bool WindowSDL::PollEvents() {
         if (text_requested) { // SDL text input must be toggled from the window thread
             text_requested = false;
             text_active = true;
+            int w = 0, h = 0;
+            SDL_GetWindowSize(window, &w, &h);
+            const SDL_Rect area = BbOverlay::TextEntryArea(w, h);
+            SDL_SetTextInputArea(window, &area, 0);
             SDL_StartTextInput(window);
             UpdateTextTitle();
         }
@@ -96,7 +106,14 @@ bool WindowSDL::PollEvents() {
     }
     SDL_Event event;
     while (SDL_PollEvent(&event)) {
-        if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
+        // Keys typed into the text box press no controls: the game would take them as presses
+        // on its text field (another dialog for each confirm press).
+        const bool typing =
+            text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN);
+        if (!typing) {
+            BbInput::Observe(event);
+        }
+        if (typing) {
             std::scoped_lock lock{text_mutex};
             if (event.type == SDL_EVENT_TEXT_INPUT) {
                 text += event.text.text;
@@ -125,9 +142,12 @@ bool WindowSDL::PollEvents() {
             break;
         }
         case SDL_EVENT_KEY_DOWN:
-            // F11: borderless fullscreen at the desktop size, or back to the window.
+            // F11: borderless fullscreen at the desktop size, or back to the window (kept in
+            // bbport.ini like the menu's switch).
             if (event.key.key == SDLK_F11 && !event.key.repeat) {
-                SDL_SetWindowFullscreen(window, !(SDL_GetWindowFlags(window) & SDL_WINDOW_FULLSCREEN));
+                auto& settings = BbSettings::Get();
+                settings.fullscreen = !settings.fullscreen;
+                BbSettings::Save();
             }
             break;
         case SDL_EVENT_QUIT:
@@ -138,6 +158,13 @@ bool WindowSDL::PollEvents() {
             break;
         }
     }
+    // The fullscreen setting (F11, the menu) is applied here, on the window thread.
+    if (const bool fullscreen = BbSettings::Get().fullscreen; fullscreen != fullscreen_applied) {
+        fullscreen_applied = fullscreen;
+        SDL_SetWindowFullscreen(window, fullscreen);
+    }
+    BbInput::UpdateCapture(window, text_active);
+    BbCursor::Update(window);
     return is_open;
 }
 

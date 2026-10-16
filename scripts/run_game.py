@@ -27,7 +27,9 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
 from mods import remove_overlay
+from prepare import sfo
 
 WINDOWS = os.name == 'nt'
 ROOT = Path(__file__).resolve().parent.parent
@@ -81,7 +83,30 @@ def build():
     bash = msys_root() / 'usr/bin/bash.exe'
     if not bash.is_file():
         sys.exit(f'MSYS2 not found at {msys_root()} (set BB_MSYS2, or BB_PREBUILT=1 with a built out/)')
-    run([bash, '-lc', 'bash build.sh'], environment=dict(os.environ, MSYSTEM='CLANG64', CHERE_INVOKING='1'))
+    # MSYS2's bash leaves the console without newline processing and line wrapping: the lines
+    # after it (the game's included) would pile up unseen in the last column.
+    mode = console_mode()
+    try:
+        run([bash, '-lc', 'bash build.sh'], environment=dict(os.environ, MSYSTEM='CLANG64', CHERE_INVOKING='1'))
+    finally:
+        console_mode(mode)
+
+
+def console_mode(restore=None):
+    """Windows: the console output mode, or None without a console; with `restore`, sets it."""
+    import ctypes
+    kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
+    kernel32.GetStdHandle.restype = ctypes.c_void_p
+    kernel32.GetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint32)]
+    kernel32.SetConsoleMode.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+    handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+    if not handle or handle == ctypes.c_void_p(-1).value:
+        return None
+    if restore is not None:
+        kernel32.SetConsoleMode(handle, restore)
+        return restore
+    mode = ctypes.c_uint32()
+    return mode.value if kernel32.GetConsoleMode(handle, ctypes.byref(mode)) else None
 
 
 def optimize_fsr4(prebuilt):
@@ -104,6 +129,27 @@ def configured_live_resolution(config):
         if match:
             value = match.group(1)
     return value
+
+
+def enter_button(config, game):
+    """The confirm button, circle or cross: bbport.ini enter_button, where auto follows the dump's
+    region as that region's consoles are set up (Japan, Asia and Korea confirm with circle; those
+    dumps also act with circle and dodge with cross in the game)."""
+    value = 'auto'
+    try:
+        for line in Path(config).read_text(errors='replace').splitlines():
+            match = re.fullmatch(r'enter_button=(auto|circle|cross)', line.strip())
+            if match:
+                value = match.group(1)
+    except OSError:
+        pass
+    if value != 'auto':
+        return value
+    try:
+        content = str(sfo(Path(game, 'sce_sys/param.sfo').read_bytes()).get('CONTENT_ID', ''))
+    except (OSError, ValueError):
+        content = ''
+    return 'circle' if content[:2] in ('JP', 'HP', 'KP') else 'cross'
 
 
 def gpu_check(caps):
@@ -175,13 +221,69 @@ def ignore_interrupts():
     signal.signal(signal.SIGQUIT, signal.SIG_IGN)
 
 
-def start(command, probe, overlay):
+LOGS_KEPT = 10
+
+
+ANSI_COLOR = re.compile(rb'\x1b\[[0-9;]*m')
+
+
+def run_logged(command, logs):
+    """Windows: bb-probe's output (unbuffered stdout and stderr) goes to the console and to
+    logs/bbport-<time>.log in the data folder, each line there with the time of day; the newest
+    LOGS_KEPT logs are kept."""
+    try:
+        os.makedirs(logs, exist_ok=True)
+        old = sorted(glob.glob(os.path.join(logs, 'bbport-*.log')))
+        for path in old[:max(0, len(old) - (LOGS_KEPT - 1))]:
+            os.remove(path)
+        path = os.path.join(logs, time.strftime('bbport-%Y%m%d-%H%M%S.log'))
+        log = open(path, 'ab')
+    except OSError as error:
+        print(f'{logs}: {error.strerror}; running without a log', file=sys.stderr)
+        return subprocess.call([str(c) for c in command])
+    print('Log:', path, flush=True)
+    with log:
+        log.write(f'bbport {time.strftime("%Y-%m-%d %H:%M:%S")}\nCommand: {quoted(command)}\n'.encode())
+        log.write(''.join(f'{k}={v}\n' for k, v in sorted(os.environ.items()) if k.startswith('BB_')).encode())
+        log.flush()
+        # Colours: the console interprets escape sequences (some lines are highlighted); the log
+        # gets the text without them.
+        mode = console_mode()
+        if mode is not None and console_mode(mode | 0x0004) is not None:  # ENABLE_VIRTUAL_TERMINAL_PROCESSING
+            os.environ['BB_CONSOLE_COLOR'] = '1'
+        child = subprocess.Popen([str(c) for c in command], stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        console = sys.stdout.buffer
+        interrupted = False
+        line_start = True
+        while True:
+            try:
+                chunk = child.stdout.read1(65536)
+            except KeyboardInterrupt:
+                interrupted = True
+                continue
+            if not chunk:
+                break
+            console.write(chunk)
+            console.flush()
+            stamp = time.strftime('[%H:%M:%S] ').encode()
+            for piece in chunk.splitlines(keepends=True):
+                if line_start:
+                    log.write(stamp)
+                log.write(ANSI_COLOR.sub(b'', piece))
+                line_start = piece.endswith(b'\n')
+            log.flush()
+        status = child.wait()
+        log.write(f'\nExit status: {status}\n'.encode())
+    return 130 if interrupted else status
+
+
+def start(command, probe, overlay, logs):
     """Runs bb-probe and returns its status; on Linux without a mod view it replaces this
     process (the GTK launcher's process, and probe.c's restart execs run.sh in place)."""
     if WINDOWS:
         print('Starting:', quoted(command), flush=True)
         try:
-            return subprocess.call([str(c) for c in command])
+            return run_logged(command, logs)
         except KeyboardInterrupt:
             return 130
     try:
@@ -320,6 +422,14 @@ def main():
              '--output-res', env('BB_OUTPUT_RES'),
              '--patches-dir', env('BB_PATCHES_DIR', os.path.join(data, 'patches')),
              '--patches-config', env('BB_PATCHES_CONFIG', os.path.join(data, 'patches.json'))])
+        # BB_ENTER_BUTTON=circle|cross overrides; a value chosen here is chosen again on restart.
+        if os.environ.get('BB_AUTO_ENTER_BUTTON') == '1' or not env('BB_ENTER_BUTTON'):
+            os.environ.update(BB_ENTER_BUTTON=enter_button(config, merged), BB_AUTO_ENTER_BUTTON='1')
+        print(f'Confirm button: {os.environ["BB_ENTER_BUTTON"]}')
+        # The mouse in menus (runtime_menu.c) is on unless BB_MENU_PROBE=0: a menu frees the mouse
+        # the camera holds and draws the cursor. Without it a menu keeps the mouse hidden.
+        if not env('BB_MENU_PROBE'):
+            os.environ['BB_MENU_PROBE'] = '1'
         if not env('BB_VBLANK_HZ'):
             os.environ['BB_VBLANK_HZ'] = {'uncap': '0', '90': '90'}.get(fps, '60')
         if not WINDOWS:
@@ -338,7 +448,7 @@ def main():
         if os.environ.get('BB_DRY_RUN') == '1':
             describe_dry_run(command, probe)
             return 0
-        return start(command, probe, overlay)
+        return start(command, probe, overlay, env('BB_LOG_DIR', os.path.join(data, 'logs')))
     finally:
         if overlay:
             remove_overlay(overlay)
