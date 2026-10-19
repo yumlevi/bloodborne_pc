@@ -1,0 +1,49 @@
+name: bbport-online-local
+services:
+  shadnet:
+    build: .
+    image: bbport-shadnet:online-local
+    restart: unless-stopped
+    environment:
+      SHADNET_SEAMLESS: "false"
+    ports:
+      - "127.0.0.1:31313:31313/tcp"
+      - "127.0.0.1:31314:31314/udp"
+      - "127.0.0.1:31315:31315/tcp"
+      - "127.0.0.1:18080:18080/tcp"
+    networks:
+      - default
+      - bbport-control
+    volumes:
+      - shadnet-data:/var/lib/shadnet
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:31315/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+  portal:
+    build: ./portal
+    image: bbport-online-portal:local
+    network_mode: service:shadnet
+    depends_on:
+      shadnet:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      PORTAL_AUTO_APPROVE: "true"
+      HEADSCALE_API_URL: "http://headscale:8080"
+      HEADSCALE_API_KEY_FILE: "/var/lib/portal/headscale_api_key"
+      HEADSCALE_USER_ID: "${HEADSCALE_USER_ID:-1}"
+    volumes:
+      - shadnet-data:/run/shadnet:ro
+      - portal-data:/var/lib/portal
+    security_opt:
+      - no-new-privileges:true
+volumes:
+  shadnet-data:
+  portal-data:
+networks:
+  default:
+  bbport-control:
+    name: bbport-headscale-control
+    external: true

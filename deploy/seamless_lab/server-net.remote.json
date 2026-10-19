@@ -1,0 +1,14 @@
+{
+  "control_url": "https://82.157.168.20",
+  "state_dir": "/var/lib/bbport-seamless",
+  "hostname": "bbport-seamless-server",
+  "tcp_publishes": [
+    {"tailnet_port": 31313, "local": "127.0.0.1:32313"},
+    {"tailnet_port": 31315, "local": "127.0.0.1:32315"},
+    {"tailnet_port": 18080, "local": "127.0.0.1:32443"},
+    {"tailnet_port": 31316, "local": "127.0.0.1:32444"}
+  ],
+  "udp_publishes": [
+    {"tailnet_port": 31314, "local": "127.0.0.1:32314", "stun_source": true}
+  ]
+}

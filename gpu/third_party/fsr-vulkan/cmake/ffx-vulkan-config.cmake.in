@@ -1,0 +1,13 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+find_dependency(Vulkan)
+include("${CMAKE_CURRENT_LIST_DIR}/ffx-vulkan-targets.cmake")
+
+# Defined only when the package was explicitly installed with a complete,
+# caller-supplied source-v07 bundle. Applications still decide whether and how
+# to load it; this is only a discoverable data location for the asset helper.
+if("@FFX_VK_PORTABLE_INSTALL_FSR4_V07_ASSETS@" STREQUAL "ON")
+    set(FFX_VK_FSR4_V07_ASSET_DIR
+        "${PACKAGE_PREFIX_DIR}/@CMAKE_INSTALL_DATADIR@/ffx-vulkan/fsr4-v07")
+endif()

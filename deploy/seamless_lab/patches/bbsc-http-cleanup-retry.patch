@@ -1,0 +1,97 @@
+diff --git a/emulator/mod/bbsc_http.cpp b/emulator/mod/bbsc_http.cpp
+index 4bd6a6c..be64dfd 100644
+--- a/emulator/mod/bbsc_http.cpp
++++ b/emulator/mod/bbsc_http.cpp
+@@ -37,6 +37,7 @@
+ #include <atomic>
+ #include <cctype>
+ #include <cstring>
++#include <cwchar>
+ #include <fstream>
+ #include <map>
+ #include <thread>
+@@ -287,8 +288,13 @@ std::string JsonNumber(const std::string& body, const char* key) {
+     return body.substr(at + needle.size(), end - at - needle.size());
+ }
+ 
+-// One plain POST with WinHTTP (the stale-record delete). Returns the status code, 0 on failure.
+-DWORD Post(const std::string& url, const std::string& body) {
++struct CleanupPostResult {
++    DWORD status = 0;
++    int consumed = -1; // Old brokers do not send the diagnostic header.
++};
++
++// One plain POST with WinHTTP (the stale-record delete).
++CleanupPostResult Post(const std::string& url, const std::string& body) {
+     std::wstring wide(url.begin(), url.end());
+     URL_COMPONENTS parts{sizeof(parts)};
+     wchar_t host[256]{};
+@@ -298,9 +304,9 @@ DWORD Post(const std::string& url, const std::string& body) {
+     parts.lpszUrlPath = path;
+     parts.dwUrlPathLength = 2048;
+     if (!WinHttpCrackUrl(wide.c_str(), 0, 0, &parts)) {
+-        return 0;
++        return {};
+     }
+-    DWORD status = 0;
++    CleanupPostResult result;
+     HINTERNET session = WinHttpOpen(L"BBSC", WINHTTP_ACCESS_TYPE_NO_PROXY, nullptr, nullptr, 0);
+     HINTERNET connect = session ? WinHttpConnect(session, host, parts.nPort, 0) : nullptr;
+     HINTERNET request =
+@@ -315,9 +321,16 @@ DWORD Post(const std::string& url, const std::string& body) {
+                                const_cast<char*>(body.data()), static_cast<DWORD>(body.size()),
+                                static_cast<DWORD>(body.size()), 0) &&
+             WinHttpReceiveResponse(request, nullptr)) {
+-            DWORD size = sizeof(status);
++            DWORD size = sizeof(result.status);
+             WinHttpQueryHeaders(request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+-                                nullptr, &status, &size, nullptr);
++                                nullptr, &result.status, &size, nullptr);
++            wchar_t count[32]{};
++            size = sizeof(count);
++            if (WinHttpQueryHeaders(request, WINHTTP_QUERY_CUSTOM,
++                                    L"X-Bbport-Summon-Consumed", count, &size, nullptr) &&
++                count[0] >= L'0' && count[0] <= L'9') {
++                result.consumed = static_cast<int>(std::wcstol(count, nullptr, 10));
++            }
+         }
+     }
+     for (HINTERNET h : {request, connect, session}) {
+@@ -325,7 +338,7 @@ DWORD Post(const std::string& url, const std::string& body) {
+             WinHttpCloseHandle(h);
+         }
+     }
+-    return status;
++    return result;
+ }
+ 
+ // The broker keeps Preparing/Claimed/Delivered records 15 minutes and Bloodborne reuses its
+@@ -337,6 +350,8 @@ void ClearStaleRecord(const std::string& url, const std::string& body) {
+     const std::string session = JsonString(body, "SessionId");
+     const std::string user = JsonNumber(body, "UserId");
+     if (session.empty() || user.empty()) {
++        stale_cleared = false;
++        LOG_WARNING(Mod, "HTTP: stale summon cleanup has no session/user; retry on next sign");
+         return;
+     }
+     std::string removal_url = url;
+@@ -346,9 +361,16 @@ void ClearStaleRecord(const std::string& url, const std::string& body) {
+                                 session + "\",\"UserId\":" + user + ",\"Force\":true}";
+     // It must finish before the new sign is created (the delete names the same session), so it
+     // stays on this thread - the game's - with short timeouts (2026-10-08: up to 14 s before).
+-    const DWORD status = Post(removal_url, removal);
+-    LOG_INFO(Mod, "HTTP: stale summon cleanup for session {} user {}: status {}", session, user,
+-             status);
++    const CleanupPostResult result = Post(removal_url, removal);
++    if (result.status != 200) {
++        stale_cleared = false;
++        LOG_WARNING(Mod, "HTTP: stale summon cleanup for session {} user {} failed (status {}); "
++                         "retry on next sign", session, user, result.status);
++        return;
++    }
++    LOG_INFO(Mod, "HTTP: stale summon cleanup for session {} user {}: status {}, consumed {} "
++                  "(-1 means broker did not report a count)", session, user, result.status,
++             result.consumed);
+ }
+ 
+ // ---- Stuck claims (2026-10-06) -------------------------------------------------------------------

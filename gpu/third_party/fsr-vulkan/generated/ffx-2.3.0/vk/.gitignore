@@ -1,0 +1,4 @@
+# Superseded local generator trials. The canonical checked profile is
+# fsr3upscaler-q2-v2, selected by extern/ffx-vulkan/CMakeLists.txt.
+/fsr3upscaler/
+/fsr3upscaler-q2/

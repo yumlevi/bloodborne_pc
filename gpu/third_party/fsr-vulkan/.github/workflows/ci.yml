@@ -1,0 +1,19 @@
+name: portable-vulkan
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Vulkan build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake g++ libvulkan-dev glslang-tools
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --parallel
+      - name: Test
+        run: ctest --test-dir build --output-on-failure

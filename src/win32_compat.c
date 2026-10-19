@@ -20,7 +20,8 @@
 int runtime_win_mkdir(const char *path, int mode) { (void)mode; return _mkdir(path); }
 /* POSIX rename replaces an existing target; MoveFileEx does so only when asked. */
 int runtime_win_rename(const char *from, const char *to) {
-    if (MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED)) return 0;
+    if (MoveFileExA(from, to,
+                    MOVEFILE_REPLACE_EXISTING | MOVEFILE_COPY_ALLOWED | MOVEFILE_WRITE_THROUGH)) return 0;
     DWORD e = GetLastError();
     errno = e == ERROR_FILE_NOT_FOUND || e == ERROR_PATH_NOT_FOUND ? ENOENT
           : e == ERROR_ACCESS_DENIED || e == ERROR_SHARING_VIOLATION ? EACCES

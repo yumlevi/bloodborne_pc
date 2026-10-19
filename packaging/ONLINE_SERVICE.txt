@@ -1,0 +1,14 @@
+# Local Docker test mapping only. 127.0.0.1 means the player's own computer;
+# this package cannot connect to this server from another computer.
+# Never put a registration secret in this file or in the launcher.
+server=127.0.0.1:31313
+portal=http://127.0.0.1:18080
+# Local-only Headscale control plane; never include auth or admin keys.
+control=http://127.0.0.1:18081
+# Private two-machine test only: set overlay_server to the approved server
+# node's Headscale 100.64.0.0/10 address, then rebuild the launcher. Leave it
+# unset for this single-machine Docker package; do not publish test identities.
+# overlay_server=100.64.x.y
+# Optional isolated BBSC/seamless node. When configured, the launcher proxies
+# only 32313-32444 to this separate node and leaves overlay_server unchanged.
+# seamless_overlay_server=100.64.x.y

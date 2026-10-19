@@ -1,0 +1,10 @@
+bbport embedded network helper
+
+The helper is built from tools/embedded_net/main.go and uses tailscale.com/tsnet
+(BSD-3-Clause). It runs as a separate userspace process and does not install a
+system service, virtual adapter, or official Tailscale desktop client.
+
+Tailscale source and third-party notices: https://github.com/tailscale/tailscale
+Tailscale license: https://github.com/tailscale/tailscale/blob/main/LICENSE
+
+bbport's modifications and bridge protocol are distributed under GPL-2.0-or-later.

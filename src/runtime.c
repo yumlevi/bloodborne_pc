@@ -220,6 +220,10 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     if (memory) return memory;
     uintptr_t kernel = runtime_kernel_resolve(name);
     if (kernel) return kernel;
+    uintptr_t network = runtime_network_resolve(name);
+    if (network) return network;
+    uintptr_t np_lan = runtime_np_lan_resolve(name);
+    if (np_lan) return np_lan;
     uintptr_t services = runtime_services_resolve(name);
     if (services) return services;
     uintptr_t ajm = runtime_ajm_resolve(name);

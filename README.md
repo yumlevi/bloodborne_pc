@@ -89,7 +89,21 @@ bash launcher/bb-launcher.sh         # launcher/install-desktop.sh adds it to th
 
 By default the game folder is expected next to the repository (`../CUSA03173`). Saves and the
 shader cache go to `user/` (the launcher lets you choose another folder); settings to
-`bbport.ini`. A gamepad is used through SDL3; there is a keyboard fallback.
+`bbport.ini`. SDL3 gamepad, keyboard and mouse input can be used at the same time. The default
+keyboard mapping is WASD/arrow keys plus nearby action keys; relative mouse motion controls the
+camera. F10 releases or recaptures the pointer. The Windows Chinese portable launcher has a
+complete remapping page (keys, five mouse buttons, wheel, sensitivity and inverted Y); it passes
+the choices as `BB_KEY_*` and `BB_MOUSE_*` variables.
+
+The Chinese Windows portable launcher keeps player data in a stable directory under
+`%LOCALAPPDATA%\BloodbornePC\PlayerData` by default, independently of the runtime installation.
+Its save manager validates Bloodborne `userdata0000`...`userdata0010` files, imports folder or
+ZIP saves across supported CUSA regions, creates automatic/manual ZIP backups, and restores or
+exports them. An existing `<old runtime>\user\savedata` is copied on first launch when the stable
+directory has no save yet. It also includes very-low/low/medium/high recommended graphics
+profiles and selectable v1.09 single-player cheat patches. Every Windows run has a persistent
+UTF-8 log; exit 139 displays the captured access type, exception address, memory region,
+registers and stack summary.
 
 `run.sh` and `run.bat` (Windows) only find Python and call the same launcher,
 `scripts/run_game.py`: it prepares the game image and the patches, builds the port when needed
@@ -197,7 +211,9 @@ pass), `BB_FSR4_PROFILE=1` (GPU time per FSR 4 pass), `BB_UPSCALER=taa|fsr3|fsr4
 0 = unbounded), `BB_PRESENT_THREAD=0` (present on the vblank thread, as before),
 `BB_LIVE_RES=1` (live resolution changes instead of the startup patch for outputs other than 1080p),
 `BB_PAD_RECORD=file` / `BB_PAD_REPLAY=file` (record a route with F9, replay it in scripted tests),
-`BB_GC_BUDGET_MB=N` (texture cache budget, as on integrated GPUs), `BB_PRESENT_DUMP_TRIGGER=file`
+`BB_GC_BUDGET_MB=N` (texture cache budget, as on integrated GPUs),
+`BB_GC_IDLE_SECONDS=N` (1–63 seconds, texture idle age; 20 by default),
+`BB_SAVE_TRACE=1` (atomic save transaction diagnostics), `BB_PRESENT_DUMP_TRIGGER=file`
 with `BB_PRESENT_DUMP_COUNT=N` (dump N consecutive presented frames).
 More in [docs/](docs); recent changes: [docs/CHANGES_2026-10-02.md](docs/CHANGES_2026-10-02.md),
 [docs/CHANGES_2026-10-03.md](docs/CHANGES_2026-10-03.md).
@@ -259,6 +275,14 @@ GPU page tracking and crash reports run in a vectored exception handler; the gue
 pointer lives in a TEB TLS slot (`patch_tls_reads` in `src/probe.c`); `src/win32_compat.c`
 covers file system and time zone details. With libc++ on Windows, `std::thread::get_id()` and
 `std::jthread::joinable()` ask the kernel (`GetThreadId`): hot paths keep their own flags.
+
+The Windows launcher validates the supported CUSA03173 v1.09 executable and the first shader
+bundle before linking, so a wrong update or damaged extraction fails with an actionable message.
+Save and shader-cache writes use a flushed temporary file followed by an atomic replacement.
+Startup-patched 720p/1080p outputs keep the native 5056 MiB direct-memory budget; 1440p/4K use
+9152 MiB for their larger render targets. `BB_DMEM_MB` remains an explicit override.
+The optional Old Hunters switch creates the shadPS4-compatible entitlement folder at
+`<player data>/addcont/CUSA03173/SPEXPANSIONDLC03`; it does not provide game or DLC data.
 
 ## Repository layout
 

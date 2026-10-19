@@ -1,0 +1,68 @@
+diff --git a/src/webapi_server.cpp b/src/webapi_server.cpp
+--- a/src/webapi_server.cpp
++++ b/src/webapi_server.cpp
+@@ -45,4 +45,1 @@
+-    if (!m_http->bind(m_tcp.get())) {
+-        qCritical() << "WebApiServer: QHttpServer failed to attach to listener";
+-        return false;
+-    }
++    m_http->bind(m_tcp.get());
+@@ -71,2 +68,2 @@
+     m_http->setMissingHandler(
+-        this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
++        [](const QHttpServerRequest& req, QHttpServerResponder&& responder) {
+@@ -81,5 +78,2 @@
+-            responder.sendResponse(QHttpServerResponse{
+-                "application/json",
+-                QJsonDocument(body).toJson(QJsonDocument::Compact),
+-                QHttpServerResponder::StatusCode::NotFound,
+-            });
++            responder.write(QJsonDocument(body).toJson(QJsonDocument::Compact), "application/json",
++                            QHttpServerResponder::StatusCode::NotFound);
+diff --git a/src/stats_server.cpp b/src/stats_server.cpp
+--- a/src/stats_server.cpp
++++ b/src/stats_server.cpp
+@@ -74,4 +74,1 @@
+-    if (!m_http->bind(m_tcp.get())) {
+-        qCritical() << "StatsServer: QHttpServer failed to attach to listener";
+-        return false;
+-    }
++    m_http->bind(m_tcp.get());
+@@ -127,2 +124,2 @@
+     m_http->setMissingHandler(
+-        this, [](const QHttpServerRequest& req, QHttpServerResponder& responder) {
++        [](const QHttpServerRequest& req, QHttpServerResponder&& responder) {
+@@ -132,2 +129,2 @@
+-            responder.sendResponse(QHttpServerResponse{"application/json", toJson(body),
+-                                                       QHttpServerResponder::StatusCode::NotFound});
++            responder.write(toJson(body), "application/json",
++                            QHttpServerResponder::StatusCode::NotFound);
+diff --git a/src/webapi_routes_bloodborne.cpp b/src/webapi_routes_bloodborne.cpp
+--- a/src/webapi_routes_bloodborne.cpp
++++ b/src/webapi_routes_bloodborne.cpp
+@@ -11,1 +11,0 @@
+-#include <QHttpHeaders>
+@@ -36,4 +35,1 @@
+-        QHttpHeaders headers = response.headers();
+-        if (headers.append(HostPlacementHeader, hostPlacement)) {
+-            response.setHeaders(std::move(headers));
+-        }
++        response.addHeader(HostPlacementHeader, hostPlacement);
+@@ -59,4 +55,1 @@
+-        QHttpHeaders headers = response.headers();
+-        if (headers.append(HostPlacementHeader, hostPlacement)) {
+-            response.setHeaders(std::move(headers));
+-        }
++        response.addHeader(HostPlacementHeader, hostPlacement);
+@@ -183,4 +176,1 @@
+-                   QHttpHeaders headers = response.headers();
+-                   if (headers.append(HostPlacementHeader, result.pendingHostPlacement)) {
+-                       response.setHeaders(std::move(headers));
+-                   }
++                   response.addHeader(HostPlacementHeader, result.pendingHostPlacement);
+diff --git a/src/webapi_routes_session.cpp b/src/webapi_routes_session.cpp
+--- a/src/webapi_routes_session.cpp
++++ b/src/webapi_routes_session.cpp
+@@ -280,1 +280,1 @@
+-    return QDateTime::fromMSecsSinceEpoch(ms, QTimeZone::UTC).toString(Qt::ISODate);
++    return QDateTime::fromMSecsSinceEpoch(ms, Qt::UTC).toString(Qt::ISODate);

@@ -1,2 +1,4 @@
 # cmd.exe needs CRLF batch files
 *.bat text eol=crlf
+deploy/shadnet/*.sh text eol=lf
+deploy/shadnet/patches/*.patch text eol=lf

@@ -48,11 +48,13 @@ Rasterizer::Rasterizer(const Instance& instance_, Scheduler& scheduler_, Runtime
       pipeline_cache{instance, scheduler, liverpool, buffer_cache.GetSparsePageShift()},
       host_markers_enabled{EmulatorSettings.IsVkHostMarkersEnabled()},
       guest_markers_enabled{EmulatorSettings.IsVkGuestMarkersEnabled()} {
+    // Object motion first: it fixes the buffer addresses the motion shader variants are
+    // specialized with; then the cached pipelines are preloaded, before any worker runs.
+    object_motion = std::make_unique<ObjectMotion>(instance, scheduler);
+    pipeline_cache.WarmUp();
     // Before the rasterizer is bound: Liverpool enqueues buffers only once it sees it.
     draw_prep = std::make_unique<DrawPreparation>(pipeline_cache);
     scene_targets = std::make_unique<SceneTargets>(instance, scheduler, runtime, texture_cache);
-    // Object motion first: it fixes the buffer addresses the motion shader variants embed.
-    object_motion = std::make_unique<ObjectMotion>(instance, scheduler);
     camera_motion = std::make_unique<CameraMotion>(instance, scheduler, texture_cache, runtime);
     camera_motion->SetObjectMotion(object_motion.get());
     upscaler = std::make_unique<TemporalUpscaler>(instance, scheduler, texture_cache, runtime,
@@ -2130,22 +2132,29 @@ void Rasterizer::BindBuffers(const Shader::Info& stage, const PreparedStage* pre
                     LOG_ERROR(Render, "Clamped size from {} to {} for stage {:#x}",
                               vsharp.GetSize(), size, stage.pgm_hash);
                 }
-                const auto [buffer, offset] = buffer_cache.ObtainBuffer(
-                    vsharp.base_address, size, desc.is_written, desc.is_formatted);
-                const u64 offset_aligned = Common::AlignDown(offset, alignment);
-                const u64 adjust = offset - offset_aligned;
-                if (adjust % 4 != 0) {
-                    LOG_WARNING(Render_Vulkan, "Buffer binding in shader {:#x} isn't dword aligned",
-                                stage.pgm_hash);
+                if (size == 0) {
+                    // A prepared draw can outlive the guest mapping it references. Do not pass
+                    // the reserved address to BufferCache/PageManager: bind a null descriptor.
+                    push_data.AddOffset(binding.buffer, 0);
+                    buffer_infos.emplace_back(VK_NULL_HANDLE, 0, VK_WHOLE_SIZE);
+                } else {
+                    const auto [buffer, offset] = buffer_cache.ObtainBuffer(
+                        vsharp.base_address, size, desc.is_written, desc.is_formatted);
+                    const u64 offset_aligned = Common::AlignDown(offset, alignment);
+                    const u64 adjust = offset - offset_aligned;
+                    if (adjust % 4 != 0) {
+                        LOG_WARNING(Render_Vulkan, "Buffer binding in shader {:#x} isn't dword aligned",
+                                    stage.pgm_hash);
+                    }
+                    push_data.AddOffset(binding.buffer, adjust);
+                    buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
+                    bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
+                    if (desc.is_written) {
+                        // Raw storage-buffer writes can also make an aliased cached image stale.
+                        texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
+                    }
+                    needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
                 }
-                push_data.AddOffset(binding.buffer, adjust);
-                buffer_infos.emplace_back(buffer->Handle(), offset_aligned, size + adjust);
-                bound_buffers.emplace_back(buffer, offset, size, desc.is_written);
-                if (desc.is_written) {
-                    // Raw storage-buffer writes can also make an aliased cached image stale.
-                    texture_cache.InvalidateMemoryFromGPU(vsharp.base_address, size);
-                }
-                needs_barrier |= runtime.IsBufferAccessed(buffer, offset, size, desc.is_written);
             }
         }
 

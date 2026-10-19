@@ -740,10 +740,9 @@ public:
             func(current_cmdbuf);
             return;
         }
-        if (!record_chunk->Push(std::forward<Func>(func))) {
-            full_chunks.push_back(std::move(record_chunk));
-            record_chunk = AcquireChunk();
-            const bool pushed = record_chunk->Push(std::forward<Func>(func));
+        if (!CurrentChunk().Push(std::forward<Func>(func))) {
+            RetireChunk();
+            const bool pushed = CurrentChunk().Push(std::forward<Func>(func));
             ASSERT(pushed);
         }
     }
@@ -761,9 +760,8 @@ public:
             return;
         }
         ASSERT(bytes + 1024 <= RecordChunk::Capacity);
-        if (RecordChunk::Capacity - record_chunk->Size() < bytes + 1024) {
-            full_chunks.push_back(std::move(record_chunk));
-            record_chunk = AcquireChunk();
+        if (RecordChunk::Capacity - CurrentChunk().Size() < bytes + 1024) {
+            RetireChunk();
         }
     }
 
@@ -777,7 +775,7 @@ public:
         // Room for the data and the command that follows it, so both stay in one chunk.
         const size_t bytes = data.size_bytes();
         ReserveRecordData(bytes + alignof(T));
-        auto* dst = static_cast<T*>(record_chunk->Allocate(bytes, alignof(T)));
+        auto* dst = static_cast<T*>(CurrentChunk().Allocate(bytes, alignof(T)));
         std::memcpy(dst, data.data(), bytes);
         return {dst, data.size()};
     }
@@ -873,6 +871,19 @@ private:
     void AllocateWorkerCommandBuffers();
 
     std::unique_ptr<RecordChunk> AcquireChunk();
+
+    /// Swap in the replacement before the full chunk leaves. A Windows exception handler may
+    /// re-enter command recording at any instruction; record_chunk must therefore never be null.
+    void RetireChunk() {
+        auto replacement=AcquireChunk();
+        record_chunk.swap(replacement);
+        if (replacement) full_chunks.push_back(std::move(replacement));
+    }
+
+    RecordChunk& CurrentChunk() {
+        if (!record_chunk) [[unlikely]] record_chunk=AcquireChunk();
+        return *record_chunk;
+    }
 
     void RecorderThread(std::stop_token stoken);
 

@@ -3769,4 +3769,24 @@ Will help with better input delay/response times for 90 FPS. Remember to change 
             <Line Type="bytes" Address="0x01de368b" Value="c3" />
         </PatchList>
     </Metadata>
+    <Metadata Title="Bloodborne" Name="Trainer Infinite Health (CUSA03173 1.09)" Note="Verified for CUSA03173 v1.09. Other regions are experimental. Source: PS4OfflineTrainer by kmeps4 / code by Dioniso (GPL-3.0)." Author="Dioniso" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
+        <PatchList>
+            <Line Type="bytes" Address="0x054DB860" Value="48A1786695050000000081BF9900000010A3A9050F85141C93FC48A100702380000000004805F80000008B700C893048A17866950500000000E9F01B93FC90" />
+            <Line Type="bytes" Address="0x01E0D487" Value="E9D4E36C039090" />
+            <Line Type="bytes" Address="0x054DB9C0" Value="8993F800000081BB9900000010A3A9050F852D4495FC48A100702380000000004805F80000008B500C8910E9134495FC" />
+            <Line Type="bytes" Address="0x01E2FDFD" Value="E9BEBB6A0390" />
+        </PatchList>
+    </Metadata>
+    <Metadata Title="Bloodborne" Name="Trainer Infinite Echoes (CUSA03173 1.09)" Note="Locks Blood Echoes to 666,666,666. Verified for CUSA03173 v1.09; other regions are experimental. Source: PS4OfflineTrainer by kmeps4 / code by Dioniso (GPL-3.0)." Author="Dioniso" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
+        <PatchList>
+            <Line Type="bytes" Address="0x054DB8A0" Value="B8AA86BC27898294000000E9D54982FC" />
+            <Line Type="bytes" Address="0x01D0027F" Value="E91CB67D0390" />
+        </PatchList>
+    </Metadata>
+    <Metadata Title="Bloodborne" Name="Trainer Upgrade Materials (CUSA03173 1.09)" Note="Items do not decrease and become max when obtained or purchased, enabling unrestricted weapon upgrades. Verified for CUSA03173 v1.09; other regions are experimental. Source: PS4OfflineTrainer by kmeps4 / code by Dioniso (GPL-3.0)." Author="Dioniso" PatchVer="1.0" AppVer="01.09" AppElf="eboot.bin" isEnabled="true">
+        <PatchList>
+            <Line Type="bytes" Address="0x054DB840" Value="448B63084539F40F82FADC3FFC4189C64501F4E9EFDC3FFC" />
+            <Line Type="bytes" Address="0x018D9540" Value="E9FB22C0039090" />
+        </PatchList>
+    </Metadata>
 </Patch>

@@ -1,0 +1,8 @@
+[Unit]
+Description=Rotate bbport online Headscale enrollment API key
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/bbport-online/deploy/online_remote/rotate-auto-enrollment.sh

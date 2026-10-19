@@ -16,7 +16,7 @@ import json
 from pathlib import Path
 import struct
 from prepare import parse_self, span, unpack
-from link_libc import encode_id
+from link_libc import add_patch_code_cave, encode_id
 
 DEFAULT_MODULES = ('libc.prx', 'libSceFios2.prx')
 FS_LOAD = bytes.fromhex('64488b042500000000')  # mov rax, fs:[0]
@@ -105,6 +105,7 @@ def link(game, out, module_names=DEFAULT_MODULES):
     image = bytearray(span(raw, pos, size))
     if pos + size != len(raw):
         raise ValueError('unexpected boot trailer')
+    add_patch_code_cave(segments, image)
 
     identities = {main['identity'](name): i for i, name in enumerate(names)}
     main_libraries = {identity: key for key, identity in main['libraries'].items()}

@@ -1,0 +1,30 @@
+# Linux Docker Engine only. Docker Desktop on Windows does not support macvlan.
+services:
+  shadnet:
+    build:
+      context: .
+      args:
+        SHADNET_COMMIT: 5a849a192fd4450593c57b10697316ac324c856e
+    image: bbport-shadnet:5a849a1
+    container_name: bbport-shadnet
+    restart: unless-stopped
+    environment:
+      SHADNET_SEAMLESS: ${SHADNET_SEAMLESS:-false}
+    networks:
+      lan:
+        ipv4_address: ${SHADNET_IPV4:?Set an unused LAN IP outside DHCP range}
+    volumes:
+      - shadnet-data:/var/lib/shadnet
+
+networks:
+  lan:
+    driver: macvlan
+    driver_opts:
+      parent: ${SHADNET_PARENT_IFACE:?Set the Linux physical LAN interface}
+    ipam:
+      config:
+        - subnet: ${SHADNET_SUBNET:?Set the LAN subnet, e.g. 192.168.31.0/24}
+          gateway: ${SHADNET_GATEWAY:?Set the LAN gateway}
+
+volumes:
+  shadnet-data:

@@ -19,6 +19,8 @@ BB_DRY_RUN=1    every step but the last: prints the bb-probe command and its env
 The other variables are described where they are read below.
 """
 import glob
+import hashlib
+import json
 import os
 from pathlib import Path
 import re
@@ -27,6 +29,11 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from mods import remove_overlay
 
 WINDOWS = os.name == 'nt'
@@ -37,10 +44,77 @@ PYTHON = sys.executable if WINDOWS else os.environ.get('PYTHON') or sys.executab
 LAVAPIPE = ('/run/opengl-driver/share/vulkan/icd.d/lvp_icd*.json', '/usr/share/vulkan/icd.d/lvp_icd*.json')
 INITIAL_ENVIRONMENT = dict(os.environ)
 
+# Bloodborne first asks Sony's retired game-server endpoint for ss.info.  The community
+# service supplies that response (messages, bloodstains and the online-mode bootstrap), while
+# the shadp2p shadNet WebAPI supplies the summon_messenger endpoints used by the bells.
+COMMUNITY_SERVER = 'https://thehuntersdream.com'
+GAME_SERVER = 'https://ss4.scej-network.jp:20443'
+COMMUNITY_API_PORT = 18671
+BBSC_LAB_HASHES = {
+    'bbsc-launch.exe': '087c83ce466ebf3de8395731000293ff9b7ea83c735a0664fb5e32c908f62043',
+    'bbsc.dll': '239ae3725613d5b090ed7f2bed33cc1ee2031b08f4dc8897220c7f4c22da7445',
+    'LICENSE.txt': '8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643',
+    'NOTICE.txt': '9919b68f5e5f4f80d2b316c7dae40c45d0d43ce6274670d67de655fb11f01f07',
+    'SUPPORTERS.txt': '64924b1cf91ed231969bdd5dd0c6da0f15ca990c2bd65959636612f9316491aa',
+    'mod.json': '8b28fe2ac94cc14ed8640402a28255d2cf32a4864030cb9b8081fd0670727cd4',
+}
+
 
 def env(name, default=''):
     """A variable's value; `default` when it is unset or empty (as ${name:-default})."""
     return os.environ.get(name) or default
+
+
+def summon_service(webapi):
+    """Whether this shadNet WebAPI exposes shadp2p's Bloodborne summon broker."""
+    request = urllib.request.Request(webapi.rstrip('/') + '/summon_messenger/create', data=b'',
+                                     method='POST')
+    try:
+        urllib.request.urlopen(request, timeout=4).close()
+        return True
+    except urllib.error.HTTPError as error:
+        # A real route rejects an empty/unauthenticated request; a server without it says 404.
+        return error.code != 404
+    except (OSError, ValueError):
+        return False
+
+
+def online_overrides(environment, user_dir):
+    """Write and select the host routes required by Bloodborne's native online bootstrap."""
+    user_dir.mkdir(parents=True, exist_ok=True)
+    custom = user_dir / 'host_overrides.custom.json'
+    lab = environment.get('BBSC_LAB_MOD') == '1'
+    # The BBSC lab shares the ordinary save directory, but never shares its
+    # routing file. Ignore (do not modify) user custom routes in lab mode.
+    path = (user_dir / 'host_overrides.bbsc.json' if lab else
+            custom if custom.exists() else user_dir / 'host_overrides.json')
+    if lab or path != custom:
+        community = (environment.get('BB_COMMUNITY_SERVER') or COMMUNITY_SERVER).rstrip('/')
+        if '://' not in community:
+            community = 'https://' + community
+        parsed = urllib.parse.urlsplit(community)
+        if parsed.scheme not in ('http', 'https') or not parsed.hostname:
+            raise ValueError(f'Invalid BB_COMMUNITY_SERVER: {community!r}')
+        community_host = parsed.hostname
+        webapi = (environment.get('BB_SHADNET_WEBAPI') or
+                  'http://127.0.0.1:31315').rstrip('/')
+        overrides = {GAME_SERVER: community}
+        if summon_service(webapi):
+            # Public community ss.info uses 18671; the isolated BBSC lab serves
+            # its own game API on 32443. Keep both routes, without duplicating a
+            # port when BB_COMMUNITY_SERVER already contains one.
+            ports = {COMMUNITY_API_PORT}
+            if parsed.port:
+                ports.add(parsed.port)
+            for scheme in ('https', 'http'):
+                for port in ports:
+                    overrides[f'{scheme}://{community_host}:{port}/summon_messenger'] = webapi
+            print(f'Co-op: summon signs through {webapi}')
+        else:
+            print(f'Co-op: {webapi} has no summon service; summon signs through {community}')
+        path.write_text(json.dumps(overrides, indent=2) + '\n', encoding='utf-8')
+    environment['SHADPS4_HTTP_HOST_OVERRIDES_JSON'] = str(path)
+    print(f'Co-op: Bloodborne server routes loaded from {path}')
 
 
 def exit_status(code):
@@ -104,6 +178,38 @@ def configured_live_resolution(config):
         if match:
             value = match.group(1)
     return value
+
+
+def direct_memory_mb_for_output(output):
+    """Guest direct-memory budget for a startup-patched output resolution.
+
+    Bloodborne's native 5056 MiB budget is sufficient through 1080p. Higher resolutions create
+    much larger guest render targets and keep the established extra 4096 MiB headroom.
+    Unknown custom values stay on the conservative high budget.
+    """
+    match = re.fullmatch(r'(\d+)x(\d+)', output or '')
+    if not match:
+        return '9152'
+    width, height = map(int, match.groups())
+    return '5056' if width <= 1920 and height <= 1080 else '9152'
+
+
+def clear_automatic_direct_memory():
+    """Discard a budget chosen for the previous launch, preserving an explicit override."""
+    if os.environ.get('BB_AUTO_DMEM') == '1':
+        os.environ.pop('BB_DMEM_MB', None)
+        os.environ.pop('BB_AUTO_DMEM', None)
+
+
+def configure_direct_memory(output):
+    """Set and mark an automatic budget unless BB_DMEM_MB was supplied explicitly."""
+    configured = env('BB_DMEM_MB')
+    if configured:
+        return configured
+    configured = direct_memory_mb_for_output(output)
+    os.environ['BB_DMEM_MB'] = configured
+    os.environ['BB_AUTO_DMEM'] = '1'
+    return configured
 
 
 def gpu_check(caps):
@@ -181,6 +287,19 @@ def start(command, probe, overlay):
     if WINDOWS:
         print('Starting:', quoted(command), flush=True)
         try:
+            if env('BBSC_LAB_MOD') == '1':
+                # bbsc-launch.exe is a GUI-subsystem injector. When it is
+                # launched without explicit standard handles, its suspended
+                # bb-probe child can exit with code 1 after the hooks load.
+                # Give the injector inheritable pipe handles and forward the
+                # child's diagnostics into the launcher's normal run log.
+                with subprocess.Popen([str(c) for c in command], stdin=subprocess.DEVNULL,
+                                      stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                      text=True, encoding='utf-8', errors='replace',
+                                      bufsize=1) as child:
+                    for line in child.stdout:
+                        print(line, end='', flush=True)
+                    return child.wait()
             return subprocess.call([str(c) for c in command])
         except KeyboardInterrupt:
             return 130
@@ -206,6 +325,104 @@ def start(command, probe, overlay):
     signal.signal(signal.SIGINT, forward)
     # The view is removed only after the game (and any restart it exec'd) has ended.
     return exit_status(child.wait())
+
+
+def bbsc_lab_command(command, probe, runtime):
+    """Opt-in BBSC injector for the isolated Windows seamless lab only.
+
+    The launcher imports verified upstream binaries into the installed runtime.
+    BBSC_LAB_COMPONENT_DIR is for isolated developer tests outside that runtime.
+    """
+    if os.environ.get('BBSC_LAB_MOD') != '1':
+        return command
+    if not WINDOWS or os.environ.get('BB_SEAMLESS_LAB') != '1' or os.environ.get('BB_ONLINE') != '1':
+        raise ValueError('BBSC lab mod requires Windows and the isolated native-online seamless lab')
+    if os.environ.get('BB_SKIP_GAME_CHECK') == '1':
+        raise ValueError('BBSC lab mod cannot run with BB_SKIP_GAME_CHECK=1')
+    server = urllib.parse.urlsplit('//' + os.environ.get('BB_SHADNET_SERVER', ''))
+    api = urllib.parse.urlsplit(os.environ.get('BB_COMMUNITY_SERVER', ''))
+    webapi = urllib.parse.urlsplit(os.environ.get('BB_SHADNET_WEBAPI', ''))
+    relay = urllib.parse.urlsplit('//' + os.environ.get('BBSC_RELAY', ''))
+    direct_lab = server.port == 32313 and webapi.port == 32315
+    overlay_lab = (server.hostname == '127.0.0.3' and server.port == 31313 and
+                   webapi.hostname == '127.0.0.3' and webapi.port == 31315)
+    if (not server.hostname or not (direct_lab or overlay_lab) or
+            api.scheme != 'http' or api.hostname != server.hostname or api.port != 32443 or
+            webapi.scheme != 'http' or webapi.hostname != server.hostname or
+            relay.hostname != server.hostname or relay.port != 32444):
+        raise ValueError('BBSC lab endpoints must use one isolated host with either direct '
+                         '32313/32315 or managed 127.0.0.3:31313/31315, plus 32443/32444')
+    lab = Path(os.environ.get('BBSC_LAB_COMPONENT_DIR') or (Path(runtime) / 'bbsc')).resolve()
+    launcher, dll = lab / 'bbsc-launch.exe', lab / 'bbsc.dll'
+    for name, digest in BBSC_LAB_HASHES.items():
+        path = lab / name
+        if not path.is_file():
+            raise FileNotFoundError(f'BBSC lab file missing: {path}; import the complete official BBport ZIP')
+        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            raise ValueError(f'BBSC lab component does not match official BBport v0.0.1_hotfix_2: {path}')
+    os.environ['SHADPS4_BLOODBORNE_SEAMLESS_COOP'] = '0'  # BBSC DLL owns the game hooks.
+    # The upstream test mod enables these by default. Do not alter the guest's
+    # progression or publish play status on Discord during an unproven lab test.
+    # Shared progress writes the host's world flags into the guest's save.
+    # Keep it disabled even when an inherited environment enables the mod default.
+    os.environ['SHADPS4_BBSC_SHARED_PROGRESS'] = '0'
+    os.environ.setdefault('SHADPS4_BBSC_DISCORD', '0')
+    print(f'BBSC experimental mod: {dll} sha256={BBSC_LAB_HASHES[dll.name]} (isolated test server; current player save with backups)')
+    return [launcher, '--emu', probe, '--dll', dll, '--cwd', ROOT, *command[1:]]
+
+
+def configure_bbsc_save_dir(user_dir, game_dir):
+    """Give BBSC a pre-launch copy of the active save for its bell-kit backup.
+
+    BBSC's own fallback only searches shadPS4's CUSA00207 folders. bbport
+    stores this title under the game's INSTALL_DIR_SAVEDATA instead, often
+    CUSA01363 even when TITLE_ID is CUSA03023. The running game can hold the
+    live userdata files open, so BBSC must copy an idle, pre-launch snapshot.
+    """
+    from prepare import sfo
+
+    metadata = sfo((Path(game_dir) / 'sce_sys' / 'param.sfo').read_bytes())
+    title = metadata.get('INSTALL_DIR_SAVEDATA') or metadata.get('TITLE_ID')
+    if not isinstance(title, str) or not re.fullmatch(r'CUSA\d{5}', title):
+        raise ValueError('BBSC save backup: game has no valid Bloodborne save title ID')
+    save_dir = Path(user_dir).resolve() / 'savedata' / '1' / title / 'SPRJ0005'
+    snapshot_root = None
+    if save_dir.is_dir() and any(save_dir.glob('userdata00*')):
+        backup_root = Path(user_dir).resolve() / 'backups'
+        backup_root.mkdir(parents=True, exist_ok=True)
+        snapshot_root = Path(tempfile.mkdtemp(prefix='bbsc-pregrant-', dir=backup_root))
+        try:
+            shutil.copytree(save_dir, snapshot_root / 'SPRJ0005')
+        except Exception:
+            shutil.rmtree(snapshot_root, ignore_errors=True)
+            raise
+        os.environ['BBSC_SAVE_DIR'] = str(snapshot_root / 'SPRJ0005')
+        print(f'BBSC pre-grant save snapshot: {snapshot_root / "SPRJ0005"}')
+    else:
+        os.environ['BBSC_SAVE_DIR'] = str(save_dir)
+        print(f'BBSC pre-grant save not yet available: {save_dir}; '
+              'create and save a character, then restart seamless co-op to receive its bells')
+    return save_dir, snapshot_root
+
+
+def bbsc_lab_report(runtime, started_at):
+    """Expose the DLL's own log even when its injector does not inherit stdout."""
+    lab = Path(os.environ.get('BBSC_LAB_COMPONENT_DIR') or (Path(runtime) / 'bbsc')).resolve()
+    logs = lab / 'logs'
+    try:
+        recent = [path for path in logs.glob('bbsc-mod-*.log')
+                  if path.stat().st_mtime >= started_at - 2]
+        if not recent:
+            print(f'BBSC mod log not found in {logs}; hook initialization is unconfirmed', file=sys.stderr)
+            return
+        latest = max(recent, key=lambda path: path.stat().st_mtime)
+        print(f'BBSC mod log: {latest}')
+        with latest.open(encoding='utf-8', errors='replace') as stream:
+            ready = any('BBSC mod ready' in line for line in stream)
+        if not ready:
+            print('BBSC hook initialization was not confirmed; inspect the mod log', file=sys.stderr)
+    except OSError as error:
+        print(f'BBSC mod log unavailable: {error}', file=sys.stderr)
 
 
 def main():
@@ -248,6 +465,13 @@ def main():
     if not os.path.isfile(os.path.join(base, game, 'eboot.bin')):
         sys.exit(f'No eboot.bin in {game} (pass --game-dir or set BB_GAME_DIR).')
     original = Path(base, game).resolve()
+    # Fail before patching/linking when the dump is the wrong revision or has silently damaged
+    # compressed shader files. This replaces later hangs and address-dependent crashes with an
+    # actionable diagnosis; BB_SKIP_GAME_CHECK=1 is retained for developers.
+    from game_check import explain as explain_game_problem, problem as game_problem
+    validation_problem = game_problem(original)
+    if validation_problem:
+        sys.exit(f'Game check failed: {explain_game_problem(*validation_problem)}')
     if WINDOWS:
         # The last folder that worked is remembered, so run.bat alone starts the game afterwards.
         Path(remembered).write_text(str(original), encoding='utf-8')
@@ -269,6 +493,7 @@ def main():
         sys.exit('Mods: no game folder from scripts/mods.py')
     # A private merged view lasts for this launch, including restarts. Only our own view is removed.
     overlay = merged if Path(merged).resolve() != original else None
+    bbsc_snapshot = None
     try:
         if overlay and not WINDOWS:
             signal.signal(signal.SIGTERM, interrupted)
@@ -280,6 +505,9 @@ def main():
         if os.environ.get('BB_AUTO_RENDER_RES') == '1':
             for key in ('BB_RENDER_RES', 'BB_OUTPUT_RES', 'BB_AUTO_RENDER_RES'):
                 os.environ.pop(key, None)
+        # An in-game restart may change the output resolution. Recompute only values selected by
+        # this launcher; an explicit BB_DMEM_MB supplied by a developer remains authoritative.
+        clear_automatic_direct_memory()
         # BB_RENDER_RES=WxH explicitly sets the game's render resolution (a patch at start).
         # Frame rate: BB_FPS=uncap (default; delta-time patch, vblank follows the display),
         # 60/90 (fixed-timestep patches) or 30 (unpatched). BB_PATCHES adds patch names ("a;b").
@@ -308,12 +536,19 @@ def main():
             if live == 'auto':
                 live = gpu_check(caps)
             live = '1' if live == '1' else '0'
+            # The authored non-16:9 patches also adjust game-space lock-on and HUD
+            # coordinates. The live path changes only host targets, so it cannot use
+            # those fixes without a restart-time guest patch.
+            output_width, output_height = (int(part) for part in scaled_output.split('x'))
+            if output_width * 9 != output_height * 16 and live == '1':
+                print('Non-16:9 output: using the startup aspect-ratio patch (live mode unavailable)')
+                live = '0'
         if live == '1':
             print(f'Output {scaled_output}: live resolution changes (live_resolution=0: startup patch)')
         elif scaled_output:
             os.environ.update(BB_RENDER_RES=scaled_render, BB_OUTPUT_RES=scaled_output, BB_AUTO_RENDER_RES='1')
-            os.environ['BB_DMEM_MB'] = env('BB_DMEM_MB', '9152')
-            print(f'Output {scaled_output}: scene {scaled_render}, direct memory {os.environ["BB_DMEM_MB"]} MiB '
+            direct_memory = configure_direct_memory(scaled_output)
+            print(f'Output {scaled_output}: scene {scaled_render}, direct memory {direct_memory} MiB '
                   '(live_resolution=1: live changes)')
         run([PYTHON, 'scripts/patches.py', '--out', out, '--fps', fps, '--extra', env('BB_PATCHES'),
              '--settings', config, '--game-dir', merged, '--render-res', env('BB_RENDER_RES'),
@@ -326,20 +561,42 @@ def main():
             optimize_fsr4(prebuilt)
             if not prebuilt:
                 build()
+        user_dir = Path(env('BB_USER_DIR', os.path.join(data, 'user')))
+        # The vendored GPU path table initializes before bbgpu_init receives
+        # --user. Set its root in the child environment now, and create it so
+        # path_util never falls back to AppData/Roaming/shadPS4 on Windows.
+        user_dir.mkdir(parents=True, exist_ok=True)
+        os.environ['BB_GPU_USER_DIR'] = str(user_dir.resolve())
+        if env('BB_ONLINE') == '1':
+            online_overrides(os.environ, user_dir)
         command = [probe, os.path.join(out, 'boot-linked.bin'),
                    '--content-profile', os.path.join(out, 'content.bin'),
                    '--patches', os.path.join(out, 'patches.bin'), '--app0', merged,
-                   '--user', env('BB_USER_DIR', os.path.join(data, 'user')),
+                   '--user', user_dir,
                    '--timeout', env('BB_TIMEOUT', '0'), *arguments]
+        if env('BBSC_LAB_MOD') == '1':
+            # game_check above validates the exact supported image before an
+            # external DLL can be loaded. Apply this after linking/patching so
+            # the BBSC wrapper receives the same bb-probe arguments.
+            _, bbsc_snapshot = configure_bbsc_save_dir(user_dir, original)
+            command = bbsc_lab_command(command, probe, env('BB_RUNTIME', str(ROOT / 'runtime')))
         if WINDOWS:
-            # MSYS2's DLLs (libc++, SDL3, FFmpeg, ...). System32 is searched before PATH, so the
-            # Vulkan loader stays the one installed with the GPU driver.
-            os.environ['PATH'] = os.pathsep.join([str(msys_root() / 'clang64/bin'), os.environ.get('PATH', '')])
+            # Packaged builds load their private DLL closure. Development builds use MSYS2's
+            # CLANG64 DLLs. System32 is searched before PATH, so vulkan-1.dll still comes from
+            # Windows/the installed GPU driver.
+            dll_dir = env('BB_RUNTIME', str(ROOT / 'runtime')) if prebuilt else str(msys_root() / 'clang64/bin')
+            os.environ['PATH'] = os.pathsep.join([dll_dir, os.environ.get('PATH', '')])
         if os.environ.get('BB_DRY_RUN') == '1':
             describe_dry_run(command, probe)
             return 0
-        return start(command, probe, overlay)
+        started_at = time.time()
+        result = start(command, probe, overlay)
+        if env('BBSC_LAB_MOD') == '1':
+            bbsc_lab_report(env('BB_RUNTIME', str(ROOT / 'runtime')), started_at)
+        return result
     finally:
+        if bbsc_snapshot:
+            shutil.rmtree(bbsc_snapshot, ignore_errors=True)
         if overlay:
             remove_overlay(overlay)
 

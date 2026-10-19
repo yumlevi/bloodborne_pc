@@ -30,6 +30,9 @@ using namespace Xbyak::util;
 
 static Xbyak::CodeGenerator g_srt_codegen(32_MB);
 static const u8* g_srt_codegen_start = nullptr;
+// bbport: draw-preparation workers translate shaders too (compile ahead): walkers are appended
+// to the one code buffer one at a time (interleaved, their bytes ran as illegal instructions).
+static std::mutex g_srt_codegen_mutex;
 
 namespace {
 void EnsureSrtFaultHandler();
@@ -41,6 +44,7 @@ PFN_SrtWalker RegisterWalkerCode(const u8* ptr, size_t size) {
     // bbport: walkers restored from the pipeline cache fault on null SRT pointers like freshly
     // generated ones; without the handler the first such fault ended the process.
     EnsureSrtFaultHandler();
+    std::scoped_lock lock{g_srt_codegen_mutex};
     const auto func_addr = (PFN_SrtWalker)g_srt_codegen.getCurr();
     g_srt_codegen.db(ptr, size);
     g_srt_codegen.ready();
@@ -673,6 +677,8 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
     // Register the signal handler for SRT walker, if not already registered
     EnsureSrtFaultHandler();
 
+    // Code generation only (no guest memory is read): nothing jumps out while it is held.
+    std::unique_lock lock{g_srt_codegen_mutex};
     info.srt_info.walker_func = c.getCurr<PFN_SrtWalker>();
     pass_info.dst_off_dw = NUM_USER_DATA_REGS;
     ASSERT(pass_info.dst_off_dw == info.srt_info.flattened_bufsize_dw);
@@ -686,6 +692,7 @@ static void GenerateSrtProgram(Info& info, PassInfo& pass_info) {
 
     info.srt_info.walker_func_size =
         c.getCurr() - reinterpret_cast<const u8*>(info.srt_info.walker_func);
+    lock.unlock();
 
     if (EmulatorSettings.IsDumpShaders()) {
         DumpSrtProgram(info, reinterpret_cast<const u8*>(info.srt_info.walker_func),

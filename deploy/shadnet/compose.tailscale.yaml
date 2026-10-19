@@ -1,0 +1,47 @@
+name: bbport-online-tailnet
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    hostname: bbport-online
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?Set a Tailscale auth key outside the repository}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"
+      TS_KUBE_SECRET: ""
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    restart: unless-stopped
+  shadnet:
+    build: .
+    image: bbport-shadnet:online-tailnet
+    network_mode: service:tailscale
+    depends_on:
+      - tailscale
+    environment:
+      SHADNET_SEAMLESS: "false"
+    volumes:
+      - shadnet-data:/var/lib/shadnet
+    restart: unless-stopped
+  portal:
+    build: ./portal
+    image: bbport-online-portal:local
+    network_mode: service:tailscale
+    depends_on:
+      - shadnet
+    environment:
+      PORTAL_AUTO_APPROVE: "false"
+    volumes:
+      - shadnet-data:/run/shadnet:ro
+      - portal-data:/var/lib/portal
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+volumes:
+  tailscale-state:
+  shadnet-data:
+  portal-data:

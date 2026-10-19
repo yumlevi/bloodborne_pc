@@ -49,21 +49,55 @@ if [[ ! -f gpu/third_party/fsr-vulkan/CMakeLists.txt || ! -f gpu/third_party/img
     git submodule update --init --recursive
 fi
 for patch in gpu/patches/fsr-vulkan/*.patch; do
-    if ! git -C gpu/third_party/fsr-vulkan apply --reverse --check "$PWD/$patch" 2>/dev/null; then
-        git -C gpu/third_party/fsr-vulkan apply "$PWD/$patch"
+    # Portable bundles can contain an already-patched FSR tree whose detached
+    # .git file no longer resolves.  MSYS git cannot always reverse-check that
+    # copied CRLF tree, so recognize this patch's stable source marker first.
+    if [[ $(basename "$patch") == 0001-FSR-4-v07-* ]] &&
+       grep -q '^#define PROF_MAX_JOBS' gpu/third_party/fsr-vulkan/src/ffx_vk_fsr4_v07.c; then
+        continue
+    fi
+    if git -C gpu/third_party/fsr-vulkan rev-parse --git-dir >/dev/null 2>&1; then
+        if ! git -C gpu/third_party/fsr-vulkan apply --reverse --check "$PWD/$patch" 2>/dev/null; then
+            git -C gpu/third_party/fsr-vulkan apply "$PWD/$patch"
+        fi
+    elif ! git apply --no-index --directory=gpu/third_party/fsr-vulkan \
+              --reverse --check "$patch" 2>/dev/null; then
+        git apply --no-index --directory=gpu/third_party/fsr-vulkan "$patch"
     fi
 done
-cmake -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DBB_PGO="$pgo" \
-    -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" >/dev/null
+# Prefer the checked-in local dependency fallbacks when this portable source tree has them.
+# This keeps configuration offline and avoids FetchContent downloads on Windows.
+local_deps=()
+for dependency in magic_enum miniz xbyak; do
+    if [[ -f "local_deps/$dependency/CMakeLists.txt" ]]; then
+        variable=${dependency^^}
+        local_deps+=("-DFETCHCONTENT_SOURCE_DIR_${variable}=$PWD/local_deps/$dependency")
+    fi
+done
+# A copied build tree may still name its old drive/path. CMake --fresh replaces only generated
+# configuration state; source dependencies and the rest of out/ stay in place.
+cmake_fresh=()
+if [[ -f out/gpu/CMakeCache.txt ]]; then
+    expected="$PWD/gpu"
+    if command -v cygpath >/dev/null; then expected=$(cygpath -m "$expected"); fi
+    if ! grep -Fqx "CMAKE_HOME_DIRECTORY:INTERNAL=$expected" out/gpu/CMakeCache.txt; then
+        cmake_fresh=(--fresh)
+    fi
+fi
+cmake "${cmake_fresh[@]}" -S gpu -B out/gpu -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+    -DBB_PGO="$pgo" -DBB_LTO="${BB_LTO:-ON}" -DBB_PGO_DIR="$PWD/pgo" \
+    "${local_deps[@]}" >/dev/null
 echo "GPU library: PGO $pgo, LTO ${BB_LTO:-ON}"
 # A failed GPU build must stop here: an older libbbgpu.so would otherwise be used silently.
-if ! ninja -C out/gpu bbgpu > out/gpu-build.log 2>&1; then
+ninja_jobs=()
+if [[ -n ${BB_BUILD_JOBS:-} ]]; then ninja_jobs=(-j "$BB_BUILD_JOBS"); fi
+if ! ninja "${ninja_jobs[@]}" -C out/gpu bbgpu > out/gpu-build.log 2>&1; then
     grep -v '^\[' out/gpu-build.log | tail -40 >&2
     echo 'GPU library build failed (full log: out/gpu-build.log)' >&2; exit 1
 fi
 # $ORIGIN/gpu: packaged copies keep the library next to the binary without patching it.
 gpu=(-Lout/gpu -lbbgpu -Wl,-rpath,'$ORIGIN/gpu' -Wl,-rpath,"$PWD/out/gpu" -rdynamic)
-runtime=(src/runtime*.c)
+runtime=(src/runtime*.c src/lan_match.c)
 link=(-no-pie)
 if [[ -n $windows ]]; then
     # out/gpu/bbgpu_link.txt (gpu/CMakeLists.txt): libbbgpu.a and its dependencies, one per line.
@@ -83,7 +117,7 @@ fi
 # Windows: the link includes the GPU library's link-time optimization (a minute or more), and
 # run.bat builds before every start, so an up-to-date executable is kept.
 if [[ -n $windows && -f out/bb-probe.exe && -f out/bb-gpu-capabilities.exe &&
-      -z $(find src gpu/bbgpu.h out/gpu/libbbgpu.a out/gpu/bbgpu_link.txt out/libatrac9.a build.sh \
+      -z $(find src gpu/bbgpu.h out/gpu/libbbgpu.a out/gpu/libbbnet.a out/gpu/bbgpu_link.txt out/libatrac9.a build.sh \
                tools/gpu_capabilities.c -newer out/bb-probe.exe -print -quit) ]]; then
     echo "Up to date: $PWD/out/bb-probe.exe"
 else
@@ -93,14 +127,35 @@ echo "Built $PWD/out/bb-probe"
 "$CC" "${cstd[@]}" -O2 -Wall -Wextra -Werror tools/gpu_capabilities.c "${libraries[@]}" -o out/bb-gpu-capabilities
 fi
 if [[ ${1:-} == --test ]]; then
+    network_libraries=()
+    file_mod_compat=()
+    test_link=(-no-pie)
+    if [[ -n $windows ]]; then
+        network_libraries=(-lws2_32)
+        file_mod_compat=(src/win32_compat.c)
+        test_link=(-Wl,--disable-dynamicbase,--disable-high-entropy-va)
+    fi
+    "$CC" "${cstd[@]}" -O2 -g -Wall -Wextra -Werror "${threads[@]}" -I. -Isrc \
+        tests/test_network.c src/runtime_network.c "${network_libraries[@]}" -o out/network-test
+    out/network-test
+    "$CC" "${cstd[@]}" -O2 -g -Wall -Wextra -Werror "${threads[@]}" -I. -Isrc \
+        tests/test_lan_match.c src/lan_match.c "${network_libraries[@]}" -o out/lan-match-test
+    out/lan-match-test
+    "$CC" "${cstd[@]}" -O2 -g -Wall -Wextra -Werror "${threads[@]}" -I. -Isrc \
+        tests/test_np_lan.c src/runtime_np_lan.c src/lan_match.c "${network_libraries[@]}" -o out/np-lan-test
+    out/np-lan-test
+    "$CC" "${cstd[@]}" -O2 -g -Wall -Wextra -Werror "${threads[@]}" -I. -Isrc \
+        tests/test_np_lan_client.c src/runtime_np_lan.c src/lan_match.c "${network_libraries[@]}" -o out/np-lan-client-test
+    out/np-lan-client-test
     "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread "${includes[@]}" -I. -Isrc tests/test_pad.c "${libraries[@]}" -o out/pad-test
     out/pad-test
-    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/runtime-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_runtime.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" "${test_link[@]}" -o out/runtime-test
     out/runtime-test
-    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc tests/test_file_mods.c -o out/file-mods-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -Isrc \
+        tests/test_file_mods.c "${file_mod_compat[@]}" "${network_libraries[@]}" -o out/file-mods-test
     out/file-mods-test
-    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_sema.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" -o out/sema-test
+    "$CC" -std=c11 -O2 -g -Wall -Wextra -Werror -pthread -I. -Isrc tests/test_sema.c "${runtime[@]}" out/libatrac9.a -lm "${gpu[@]}" "${libraries[@]}" "${test_link[@]}" -o out/sema-test
     out/sema-test
-    "$CC" -std=c11 -D_GNU_SOURCE -O2 -g -Wall -Wextra -Werror -I. -Isrc tests/test_content.c src/runtime_content.c -o out/content-test
+    "$CC" -std=c11 -D_GNU_SOURCE -O2 -g -Wall -Wextra -Werror -I. -Isrc tests/test_content.c src/runtime_content.c "${file_mod_compat[@]}" "${network_libraries[@]}" -o out/content-test
     out/content-test
 fi

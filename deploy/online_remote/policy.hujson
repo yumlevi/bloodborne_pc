@@ -1,0 +1,10 @@
+{
+  // Only bbport's tailnet game and portal ports; no general machine access.
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["autogroup:member"],
+      "dst": ["autogroup:member:31313,31314,31315,31316,18080"]
+    }
+  ]
+}

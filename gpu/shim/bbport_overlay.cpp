@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <mutex>
+#include <string>
 
 #include <SDL3/SDL.h>
 #include "bbport_i18n.h"
@@ -53,6 +54,9 @@ using BbI18n::Tr;
 std::mutex imgui_mutex; // the ImGui context: window thread (input) and present thread
 bool initialized = false;
 std::atomic<bool> menu_open{false};
+std::atomic<bool> text_prompt_open{false};
+std::string text_prompt;
+std::string text_value;
 bool l3_down = false, r3_down = false;
 bool dirty = false; // settings changed while open: saved on close
 float base_scale = 1.0f;
@@ -317,7 +321,14 @@ void Menu() {
     ImGui::EndDisabled(); // upscaler off
 
     ImGui::SeparatorText(Tr("Output resolution"));
-    static const char* outputs[] = {"1280 x 720", "1920 x 1080", "2560 x 1440", "3840 x 2160"};
+    static const char* outputs[] = {
+        "1280 x 720 (16:9)", "1920 x 1080 (16:9)", "2560 x 1440 (16:9)",
+        "3840 x 2160 (16:9)", "640 x 360 (16:9)", "960 x 540 (16:9)",
+        "1440 x 810 (16:9)", "1600 x 900 (16:9)", "1280 x 800 (16:10)",
+        "1920 x 1200 (16:10)", "2560 x 1600 (16:10)", "2560 x 1080 (wide)",
+        "3440 x 1440 (wide)", "5120 x 2160 (wide)", "3840 x 1080 (superwide)",
+        "5120 x 1440 (superwide)", "1280 x 960 (4:3)", "1440 x 1080 (4:3)"};
+    static_assert(sizeof(outputs) / sizeof(outputs[0]) == BbSettings::OutputCount);
     int output = s.output_res;
     if (ImGui::BeginCombo(Tr("Output resolution"), outputs[output])) {
         for (int i = 0; i < BbSettings::OutputCount; ++i) {
@@ -441,7 +452,38 @@ void FpsCounter() {
     ImGui::End();
 }
 
+void TextPrompt() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(560.0f * base_scale, 0.0f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.97f);
+    ImGui::Begin("Name input###bbport_text_prompt", nullptr,
+                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings);
+    ImGui::TextWrapped("%s", text_prompt.empty() ? "Enter text" : text_prompt.c_str());
+    ImGui::Spacing();
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.08f, 0.08f, 0.10f, 1.0f));
+    ImGui::BeginChild("##typed_text", ImVec2(0.0f, 54.0f * base_scale), true,
+                      ImGuiWindowFlags_NoScrollbar);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + 10.0f * base_scale);
+    ImGui::TextWrapped("%s_", text_value.c_str());
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+    ImGui::TextDisabled("Enter: confirm    Esc: cancel    Backspace: delete");
+    ImGui::End();
+}
+
 } // namespace
+
+void SetTextPrompt(const std::string& prompt, const std::string& text, bool active) {
+    std::scoped_lock lock{imgui_mutex};
+    text_prompt = prompt;
+    text_value = text;
+    text_prompt_open.store(active, std::memory_order_release);
+}
 
 void Init(const Vulkan::Instance& instance, vk::Format format, u32 image_count) {
     std::scoped_lock lock{imgui_mutex};
@@ -609,11 +651,11 @@ bool HandleEvent(const SDL_Event& event) {
 }
 
 bool Visible() {
-    return initialized && (menu_open || BbSettings::Get().show_fps);
+    return initialized && (menu_open || text_prompt_open || BbSettings::Get().show_fps);
 }
 
 bool CapturesInput() {
-    return menu_open;
+    return menu_open || text_prompt_open;
 }
 
 void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
@@ -645,7 +687,10 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent) {
     if (menu_open) {
         Menu();
     }
-    if (BbSettings::Get().show_fps && !menu_open) {
+    if (text_prompt_open) {
+        TextPrompt();
+    }
+    if (BbSettings::Get().show_fps && !menu_open && !text_prompt_open) {
         FpsCounter();
     }
     ImGui::Render();

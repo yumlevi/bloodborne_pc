@@ -1,0 +1,32 @@
+diff --git a/src/stats_server.cpp b/src/stats_server.cpp
+--- a/src/stats_server.cpp
++++ b/src/stats_server.cpp
+@@ -65,1 +65,1 @@
+-    if (!m_tcp->listen(QHostAddress(host), port)) {
++    if (!m_tcp->listen(QHostAddress::LocalHost, port)) {
+@@ -86,4 +86,25 @@
+     m_http->route(base + "/usage", [this](const QHttpServerRequest&) {
+         return jsonResponse(
+             CachedOrBuild(QStringLiteral("usage"), [this] { return BuildUsageJson(); }));
+     });
++
++    // Private endpoint: the stats listener is loopback-only. The public portal
++    // exposes only players who explicitly opted into the directory.
++    m_http->route(base + "/online", [this](const QHttpServerRequest&) {
++        QJsonObject body;
++        QJsonArray users;
++        {
++            QReadLocker lk(&m_shared->clientsLock);
++            for (auto it = m_shared->clients.constBegin();
++                 it != m_shared->clients.constEnd(); ++it) {
++                QJsonObject user;
++                user.insert("npid", it.value().npid);
++                user.insert("title_id", it.value().npTitleId);
++                user.insert("title_name", it.value().titleName);
++                user.insert("appear_offline", it.value().appearOffline);
++                users.append(user);
++            }
++        }
++        body.insert("users", users);
++        return jsonResponse(toJson(body));
++    });

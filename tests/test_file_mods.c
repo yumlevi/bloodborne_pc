@@ -9,17 +9,30 @@ uintptr_t runtime_lookup(const RuntimeExport *table,size_t n,const char *name) {
     return 0;
 }
 int main(void) {
+#ifdef _WIN32
+    char root[]=".test-tmp/bbport-mod-files-XXXXXX";
+#else
     char root[]="/tmp/bbport-mod-files-XXXXXX";
+#endif
     assert(mkdtemp(root));
-    char game[512],user[512],source[512],link[512];
+    char game[512],user[512],source[512],link[512],savedir[512],savepath[512],stale[512];
     snprintf(game,sizeof(game),"%s/game",root);
     snprintf(user,sizeof(user),"%s/user",root);
     snprintf(source,sizeof(source),"%s/mod.dcx",root);
     snprintf(link,sizeof(link),"%s/game/asset.dcx",root);
+    snprintf(savedir,sizeof(savedir),"%s/saves",root);
+    snprintf(savepath,sizeof(savepath),"%s/slot.bin",savedir);
+    snprintf(stale,sizeof(stale),"%s/orphan.99.bbtmp",savedir);
     assert(!mkdir(game,0755));
+    assert(!mkdir(savedir,0755));
     FILE *f=fopen(source,"w"); assert(f); assert(fputs("modded",f)>=0); assert(!fclose(f));
+#ifdef _WIN32
+    f=fopen(link,"w"); assert(f); assert(fputs("modded",f)>=0); assert(!fclose(f));
+#else
     assert(!symlink(source,link));
+#endif
     runtime_file_configure(game,user);
+    assert(!runtime_file_mount("/savedata0",savedir));
     for (int i=0;i<3;++i) {
         const char *path=i==0 ? "/app0/asset.dcx" : i==1 ? "/hostapp/asset.dcx" : "asset.dcx";
         int fd=(int)do_open(path,0,0); assert(fd>=3);
@@ -45,9 +58,34 @@ int main(void) {
     int save=(int)do_open("/data/test-save",0x202,0644); assert(save>=3);
     assert(do_write(save,"save",4)==4 && !do_close(save));
     assert(!path_op("/data/test-save",2,0));
+
+    /* A writable save is invisible until close commits its complete temporary copy. */
+    f=fopen(savepath,"wb"); assert(f); assert(fwrite("old",1,3,f)==3); assert(!fclose(f));
+    save=(int)do_open("/savedata0/slot.bin",0x402,0644); assert(save>=3);
+    assert(do_write(save,"new save",8)==8);
+    f=fopen(savepath,"rb"); assert(f); char before[16]={0}; assert(fread(before,1,3,f)==3); fclose(f);
+    assert(!strcmp(before,"old"));
+    assert(!do_close(save));
+    f=fopen(savepath,"rb"); assert(f); char after[16]={0}; assert(fread(after,1,8,f)==8); fclose(f);
+    assert(!strcmp(after,"new save"));
+
+    /* POSIX open side effects also commit without an explicit write. */
+    save=(int)do_open("/savedata0/slot.bin",0x402,0644); assert(save>=3 && !do_close(save));
+    struct stat empty_stat; assert(!stat(savepath,&empty_stat) && empty_stat.st_size==0);
+    save=(int)do_open("/savedata0/created.bin",0x202,0644); assert(save>=3 && !do_close(save));
+    char created[512]; snprintf(created,sizeof(created),"%s/created.bin",savedir);
+    assert(!stat(created,&empty_stat) && empty_stat.st_size==0);
+
+    /* Opening without a write discards the copy; a stale copy from a crash is removed at mount. */
+    save=(int)do_open("/savedata0/slot.bin",2,0644); assert(save>=3 && !do_close(save));
+    f=fopen(stale,"wb"); assert(f); assert(fputs("partial",f)>=0); assert(!fclose(f));
+    runtime_file_unmount("/savedata0");
+    assert(!runtime_file_mount("/savedata0",savedir));
+    assert(access(stale,F_OK)!=0);
     assert(!unlink(link) && !unlink(source) && !rmdir(game));
     const char *dirs[]={"temp0","download0","data"};
     for (int i=0;i<3;++i) { char p[1024]; snprintf(p,sizeof(p),"%s/%s",user,dirs[i]); assert(!rmdir(p)); }
+    assert(!unlink(savepath) && !unlink(created) && !rmdir(savedir));
     assert(!rmdir(user) && !rmdir(root));
-    puts("Guest mod files: reads, stat, merged listing, readonly assets and writable saves PASS");
+    puts("Guest files: overlays, readonly assets and atomic writable saves PASS");
 }

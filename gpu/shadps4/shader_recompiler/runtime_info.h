@@ -89,6 +89,11 @@ struct MotionVectors {
     /// the position array (vec4 per vertex; element 0 is scratch), fixed for the session.
     static inline u64 params_address = 0;
     static inline u64 positions_address = 0;
+    /// The vertex variants read those two addresses from specialization constants, set when a
+    /// pipeline is created: their SPIR-V is the same in every session, so the pipeline cache
+    /// keeps them like any other shader.
+    static constexpr u32 ParamsSpecId = 0xB0;
+    static constexpr u32 PositionsSpecId = 0xB1;
     static constexpr u32 FlagStore = 1;
     static constexpr u32 FlagLoad = 2;
 };

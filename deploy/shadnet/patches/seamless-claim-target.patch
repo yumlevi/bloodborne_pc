@@ -1,0 +1,79 @@
+diff --git a/src/bloodborne_summon_broker.cpp b/src/bloodborne_summon_broker.cpp
+--- a/src/bloodborne_summon_broker.cpp
++++ b/src/bloodborne_summon_broker.cpp
+@@ -491,8 +491,18 @@ SummonBroker::ClaimResult SummonBroker::Claim(const QJsonObject& request,
+     auto target = m_records.end();
++    const auto matchesTargetIdentity = [&](const Record& record) {
++        if (!targetUser.has_value() ||
++            Integer(record.advertisement, QStringLiteral("UserId"), -1) != *targetUser) {
++            return false;
++        }
++        return targetChara.isUndefined() || targetChara.isNull() ||
++               record.advertisement.value(QStringLiteral("CharaId")) == targetChara;
++    };
+     if (!requestedSession.isEmpty()) {
+         for (auto it = m_records.begin(); it != m_records.end(); ++it) {
+             if (it->advertisement.value(QStringLiteral("SessionId")).toString() ==
+-                requestedSession) {
++                    requestedSession &&
++                (!m_seamlessCoop || !targetUser.has_value() ||
++                 (it->state != State::Consumed && matchesTargetIdentity(*it)))) {
+                 target = it;
+                 break;
+             }
+@@ -500,15 +510,12 @@ SummonBroker::ClaimResult SummonBroker::Claim(const QJsonObject& request,
+     }
+     if (target == m_records.end() && targetUser.has_value()) {
+         for (auto it = m_records.begin(); it != m_records.end(); ++it) {
+-            if (Integer(it->advertisement, QStringLiteral("UserId"), -1) != *targetUser) {
+-                continue;
+-            }
+-            if (!targetChara.isUndefined() && !targetChara.isNull() &&
+-                it->advertisement.value(QStringLiteral("CharaId")) != targetChara) {
++            if (!matchesTargetIdentity(*it) ||
++                (m_seamlessCoop && it->state == State::Consumed)) {
+                 continue;
+             }
+             if (target == m_records.end() || it->updatedAtMs > target->updatedAtMs) {
+                 target = it;
+             }
+         }
+     }
+diff --git a/tests/test_bloodborne_summon_broker.cpp b/tests/test_bloodborne_summon_broker.cpp
+--- a/tests/test_bloodborne_summon_broker.cpp
++++ b/tests/test_bloodborne_summon_broker.cpp
+@@ -271,3 +271,34 @@ int main() {
++  // Bloodborne can send the host's SessionId together with the guest's
++  // TargetUserId. A host-owned sign must never override the searched guest.
++  QByteArray ownSign = advertisement;
++  ownSign.replace("guest-session", "host-owned-session");
++  ownSign.replace("\"UserId\":2465", "\"UserId\":2466");
++  Bloodborne::SummonBroker activeOwnSign(seamlessOptions);
++  CHECK(activeOwnSign.Advertise(Parse(ownSign), ownSign, 50'000).state ==
++        Bloodborne::SummonBroker::State::Advertised);
++  CHECK(activeOwnSign.Advertise(Parse(advertisement), advertisement, 50'001).state ==
++        Bloodborne::SummonBroker::State::Advertised);
++  CHECK(activeOwnSign.Search(Parse(search), 50'002).size() == 1);
++  const auto claimedGuest = activeOwnSign.Claim(Parse(targetUserClaim), targetUserClaim, 50'003);
++  CHECK(claimedGuest.status == Bloodborne::SummonBroker::ClaimStatus::Claimed);
++  CHECK(claimedGuest.targetUserId == 2465);
++  CHECK(claimedGuest.targetSessionId == QStringLiteral("guest-session"));
++
++  // A consumed host-owned sign likewise must not block TargetUserId fallback.
++  Bloodborne::SummonBroker consumedOwnSign(seamlessOptions);
++  CHECK(consumedOwnSign.Advertise(Parse(ownSign), ownSign, 60'000).state ==
++        Bloodborne::SummonBroker::State::Advertised);
++  const QByteArray ownRemoval =
++      R"({"MessageId":"SummonDataRemoveRequest","SessionId":"host-owned-session","UserId":2466})";
++  CHECK(consumedOwnSign.Consume(Parse(ownRemoval), 60'001).consumed == 1);
++  CHECK(consumedOwnSign.Advertise(Parse(advertisement), advertisement, 60'002).state ==
++        Bloodborne::SummonBroker::State::Advertised);
++  CHECK(consumedOwnSign.Search(Parse(search), 60'003).size() == 1);
++  const auto claimedAfterOwnDelete =
++      consumedOwnSign.Claim(Parse(targetUserClaim), targetUserClaim, 60'004);
++  CHECK(claimedAfterOwnDelete.status == Bloodborne::SummonBroker::ClaimStatus::Claimed);
++  CHECK(claimedAfterOwnDelete.targetSessionId == QStringLiteral("guest-session"));
++
+   // A normal delete may retain an in-flight claim, but it is not a heartbeat:
+   // it must not extend that record's 15-minute-style retention timer.
+   Bloodborne::SummonBroker::Options shortTtlOptions = seamlessOptions;

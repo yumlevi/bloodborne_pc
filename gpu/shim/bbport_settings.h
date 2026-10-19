@@ -41,9 +41,14 @@ inline constexpr Effect Effects[] = {
 };
 inline constexpr int EffectCount = int(sizeof(Effects) / sizeof(Effects[0]));
 /// Live output resolutions: the upscaler's output and the UI host targets.
-inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840};
-inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160};
-inline constexpr int OutputCount = 4;
+inline constexpr int OutputWidths[] = {1280, 1920, 2560, 3840, 640, 960, 1440, 1600,
+                                      1280, 1920, 2560, 2560, 3440, 5120, 3840, 5120,
+                                      1280, 1440};
+inline constexpr int OutputHeights[] = {720, 1080, 1440, 2160, 360, 540, 810, 900,
+                                       800, 1200, 1600, 1080, 1440, 2160, 1080, 1440,
+                                       960, 1080};
+inline constexpr int OutputCount = int(sizeof(OutputWidths) / sizeof(OutputWidths[0]));
+static_assert(OutputCount == int(sizeof(OutputHeights) / sizeof(OutputHeights[0])));
 inline constexpr int OutputDefault = 1; ///< 1920x1080, the game's own size
 
 /// The settings. Load() sets every one from scripts/bbport_settings_table.inc before reading

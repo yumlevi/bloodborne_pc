@@ -135,6 +135,9 @@ void MemoryManager::CopySparseMemory(VAddr source, u8* dest, u64 size) {
         CopySparseSerial(source + offset, dest + offset, std::min(Chunk, size - offset));
     });
 }
+void MemoryManager::ReadGuestMemory(VAddr source, void* dest, u64 size) {
+    runtime_memory_read_backing(source, dest, size);
+}
 bool MemoryManager::TryWriteBacking(void* address, const void* data, u64 size) {
     BbWriteLog::Note(reinterpret_cast<uintptr_t>(address), data, size, BbWriteLog::Backing);
     return runtime_memory_write_backing(reinterpret_cast<uintptr_t>(address), data, size) != 0;
@@ -257,11 +260,13 @@ extern "C" int bbgpu_init(const BbGpuConfig* config) {
 }
 
 namespace Libraries::Kernel { void StartKernelService(); }
+extern "C" void bbnet_register(void); // bbnet/bbnet_glue.cpp: network and PSN (co-op)
 extern "C" void bbgpu_register_kernel(void) {
     Libraries::Kernel::StartKernelService();
     Core::Loader::SymbolsResolver resolver;
     Libraries::Kernel::RegisterEventQueue(&resolver);
     Libraries::AvPlayer::RegisterLib(&resolver);
+    bbnet_register();
 }
 
 extern "C" uintptr_t bbgpu_resolve(const char* scoped_nid) {

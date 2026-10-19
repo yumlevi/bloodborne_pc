@@ -1,0 +1,137 @@
+name: bbport-online-remote
+services:
+  headscale:
+    image: docker.io/headscale/headscale:0.29.4
+    command: serve
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/run/headscale
+    volumes:
+      - ./headscale.yaml:/etc/headscale/config.yaml:ro
+      - ./policy.hujson:/etc/headscale/policy.hujson:ro
+      - headscale-data:/var/lib/headscale
+    healthcheck:
+      test: ["CMD", "headscale", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    security_opt:
+      - no-new-privileges:true
+
+  shadnet:
+    build:
+      context: ../shadnet
+    image: bbport-shadnet:remote
+    restart: unless-stopped
+    environment:
+      # Relax sign search/claim matching on the traditional endpoint. This does
+      # not install BBSC or make the traditional game session persistent.
+      SHADNET_SEAMLESS: "true"
+      BBPORT_TRUST_TAILNET_STUN: "1"
+    ports:
+      - "127.0.0.1:31313:31313/tcp"
+      - "127.0.0.1:31314:31314/udp"
+      - "127.0.0.1:31315:31315/tcp"
+      - "127.0.0.1:18080:18080/tcp"
+    volumes:
+      - shadnet-data:/var/lib/shadnet
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:31315/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    security_opt:
+      - no-new-privileges:true
+
+  portal:
+    build:
+      context: ../shadnet/portal
+    image: bbport-online-portal:remote
+    network_mode: service:shadnet
+    depends_on:
+      shadnet:
+        condition: service_healthy
+      headscale:
+        condition: service_healthy
+    restart: unless-stopped
+    environment:
+      PORTAL_AUTO_APPROVE: "true"
+      HEADSCALE_API_URL: "http://headscale:8080"
+      HEADSCALE_API_KEY_FILE: "/var/lib/portal/headscale_api_key"
+      HEADSCALE_USER_ID: "1"
+    volumes:
+      - shadnet-data:/run/shadnet:ro
+      - portal-data:/var/lib/portal
+    security_opt:
+      - no-new-privileges:true
+
+  proxy:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    depends_on:
+      - headscale
+      - portal
+    ports:
+      - "80:80/tcp"
+      - "443:443/tcp"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - letsencrypt:/etc/letsencrypt:ro
+      - acme:/var/www/certbot:ro
+    security_opt:
+      - no-new-privileges:true
+
+  certbot:
+    image: certbot/certbot:v5.4.0
+    profiles: ["maintenance"]
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+      - acme:/var/www/certbot
+
+  certbot_initial:
+    image: certbot/certbot:v5.4.0
+    profiles: ["initial-cert"]
+    ports:
+      - "80:80/tcp"
+    volumes:
+      - letsencrypt:/etc/letsencrypt
+    command:
+      - certonly
+      - --standalone
+      - --preferred-profile
+      - shortlived
+      - --ip-address
+      - 82.157.168.20
+      - --non-interactive
+      - --agree-tos
+      - --register-unsafely-without-email
+
+  bridge:
+    build:
+      context: ../../tools/embedded_net
+      dockerfile: Dockerfile.linux
+    image: bbport-net:remote
+    network_mode: host
+    # The cloud host cannot hairpin to its own public IP; preserve the HTTPS
+    # certificate name while routing its local control connection to Nginx.
+    extra_hosts:
+      - "82.157.168.20:127.0.0.1"
+    restart: unless-stopped
+    read_only: true
+    command: ["--config", "/etc/bbport/server-net.json"]
+    volumes:
+      - ./server-net.json:/etc/bbport/server-net.json:ro
+      - bridge-state:/var/lib/bbport
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  headscale-data:
+  shadnet-data:
+  portal-data:
+  letsencrypt:
+  acme:
+  bridge-state:

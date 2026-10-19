@@ -1,0 +1,13 @@
+{
+  "control_url": "https://82.157.168.20",
+  "state_dir": "/var/lib/bbport",
+  "hostname": "bbport-server",
+  "tcp_publishes": [
+    {"tailnet_port": 31313, "local": "127.0.0.1:31313"},
+    {"tailnet_port": 31315, "local": "127.0.0.1:31315"},
+    {"tailnet_port": 18080, "local": "127.0.0.1:18080"}
+  ],
+  "udp_publishes": [
+    {"tailnet_port": 31314, "local": "127.0.0.1:31314", "stun_source": true}
+  ]
+}

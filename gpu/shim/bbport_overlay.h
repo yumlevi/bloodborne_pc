@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include <string>
+
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
@@ -33,5 +35,8 @@ void Render(vk::CommandBuffer cmdbuf, vk::ImageView view, vk::Extent2D extent);
 
 /// The menu is open: the game's input is held neutral.
 bool CapturesInput();
+
+/// The game's IME dialog: show the current text in a centered on-screen popup.
+void SetTextPrompt(const std::string& prompt, const std::string& text, bool active);
 
 } // namespace BbOverlay

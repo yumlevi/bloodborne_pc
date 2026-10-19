@@ -1,0 +1,51 @@
+name: bbport-seamless-lab
+
+# Deliberately separate from deploy/online_remote: distinct container, database,
+# registration secret and loopback ports. Nothing here changes the production
+# traditional online stack. Bind to a specific LAN address only for a two-PC test.
+services:
+  shadnet:
+    build:
+      context: ../shadnet
+    image: bbport-shadnet:seamless-lab
+    restart: unless-stopped
+    environment:
+      SHADNET_SEAMLESS: "true"
+    ports:
+      - "${SEAMLESS_BIND_IP:-127.0.0.1}:32313:31313/tcp"
+      - "${SEAMLESS_BIND_IP:-127.0.0.1}:32314:31314/udp"
+      - "${SEAMLESS_BIND_IP:-127.0.0.1}:32315:31315/tcp"
+    volumes:
+      - seamless-lab-data:/var/lib/shadnet
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:31315/status"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    security_opt:
+      - no-new-privileges:true
+
+  game-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.game-api
+    image: bbport-bbsc-game-api:seamless-lab
+    restart: unless-stopped
+    environment:
+      SEAMLESS_ADVERTISE_IP: "${SEAMLESS_ADVERTISE_IP:-127.0.0.1}"
+    ports:
+      - "${SEAMLESS_BIND_IP:-127.0.0.1}:32443:32443/tcp"
+      - "${SEAMLESS_BIND_IP:-127.0.0.1}:32444:32444/tcp"
+    volumes:
+      - seamless-game-data:/var/lib/bbsc
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1',32443),2); s.close()"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  seamless-lab-data:
+  seamless-game-data:

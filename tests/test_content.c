@@ -3,11 +3,16 @@
 #include <stdint.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <sys/stat.h>
 typedef int32_t (ABI *Module)(uint16_t);
 typedef int32_t (ABI *Init)(const void *,void *);
 typedef int32_t (ABI *Param)(uint32_t,int32_t *);
 typedef int32_t (ABI *List)(uint32_t,void *,uint32_t,uint32_t *);
 #define GET(t,n) ((t)runtime_content_resolve(n))
+static char content_root[512]=".";
+const char *runtime_file_user_dir(void) { return content_root; }
 int main(int argc,char **argv) {
     Module load=GET(Module,"g8cM39EUZ6o#M#N");
     Module loaded=GET(Module,"fMP5NHUOaMk#M#N");
@@ -48,16 +53,31 @@ int main(int argc,char **argv) {
     result.value=77;
     assert((uint32_t)param(5,&result.value)==0x80d90002 && result.value==77);
     assert((uint32_t)param(0,NULL)==0x80d90002);
+#ifdef _WIN32
+    char temp[]=".test-tmp/bbport-content-XXXXXX";
+#else
+    char temp[]="/tmp/bbport-content-XXXXXX";
+#endif
+    assert(mkdtemp(temp));
+    snprintf(content_root,sizeof(content_root),"%s",temp);
+    char addcont[600],title_dir[700],label_dir[800];
+    snprintf(addcont,sizeof(addcont),"%s/addcont",content_root);
+    snprintf(title_dir,sizeof(title_dir),"%s/CUSA03173",addcont);
+    snprintf(label_dir,sizeof(label_dir),"%s/SPEXPANSIONDLC03",title_dir);
+    assert(!mkdir(addcont,0755) && !mkdir(title_dir,0755) && !mkdir(label_dir,0755));
     unsigned char entries[48]; memset(entries,0xaa,sizeof(entries));
     struct { uint32_t hits,canary; } h={99,0xabcdef};
-    assert(list(0,NULL,0,&h.hits)==0 && h.hits==0 && h.canary==0xabcdef);
-    assert(list(0,entries,2,&h.hits)==0 && h.hits==0);
-    for (unsigned i=0;i<sizeof(entries);++i) assert(entries[i]==0xaa);
+    assert(list(0,NULL,0,&h.hits)==0 && h.hits==1 && h.canary==0xabcdef);
+    assert(list(0,entries,2,&h.hits)==0 && h.hits==1);
+    assert(!strcmp((char *)entries,"SPEXPANSIONDLC03"));
+    uint32_t status; memcpy(&status,entries+20,4); assert(status==4);
+    for (unsigned i=24;i<sizeof(entries);++i) assert(entries[i]==0xaa);
     assert((uint32_t)list(0,NULL,0,NULL)==0x80d90002);
     assert(unload(0xb4)==0 && loaded(0xb4)==0);
     assert((uint32_t)init(initial,b.boot)==0x80d90003);
     assert(unload(0xb4)==0 && (uint32_t)loaded(0xb4)==0x805a1001);
     assert(load(0xb4)==0 && init(initial,b.boot)==0 && unload(0xb4)==0);
-    puts("PASS: AppContent lifecycle, profile and output boundaries");
+    assert(!rmdir(label_dir) && !rmdir(title_dir) && !rmdir(addcont) && !rmdir(content_root));
+    puts("PASS: AppContent lifecycle, add-on folders, profile and output boundaries");
     return 0;
 }

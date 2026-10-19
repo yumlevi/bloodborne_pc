@@ -1,0 +1,11 @@
+[Unit]
+Description=Rotate bbport online enrollment API key weekly
+
+[Timer]
+OnCalendar=Sun *-*-* 04:30:00
+RandomizedDelaySec=1h
+Persistent=true
+Unit=bbport-key-rotate.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,28 @@
+name: bbport-headscale-local
+services:
+  headscale:
+    image: docker.io/headscale/headscale:0.29.4
+    command: serve
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /var/run/headscale
+    ports:
+      - "127.0.0.1:18081:8080/tcp"
+    networks:
+      - default
+      - bbport-control
+    volumes:
+      - ./config.local.yaml:/etc/headscale/config.yaml:ro
+      - headscale-data:/var/lib/headscale
+    healthcheck:
+      test: ["CMD", "headscale", "health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+volumes:
+  headscale-data:
+networks:
+  default:
+  bbport-control:
+    name: bbport-headscale-control

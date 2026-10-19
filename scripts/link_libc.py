@@ -10,6 +10,24 @@ from pathlib import Path
 import struct
 from prepare import parse_self, span, unpack
 
+# The CUSA03173 v1.09 trainer stores small executable stubs in the otherwise empty page
+# immediately before the final eboot load segment. The console maps this image page, while our
+# reconstructed loader normally exposes only exact PT_LOAD ranges. Register the page explicitly
+# when it is present and empty so the native loader can validate and execute those stubs.
+PATCH_CODE_CAVE=(0x50DB000,0x1000)
+
+
+def add_patch_code_cave(segments,image):
+    start,size=PATCH_CODE_CAVE
+    end=start+size
+    if end>len(image): return False
+    overlaps=[s for s in segments if start<s[0]+s[1] and s[0]<end]
+    if overlaps:
+        return any(s[0]<=start and end<=s[0]+s[1] and s[2]&1 for s in overlaps)
+    if any(image[start:end]): return False
+    segments.append((start,size,5))  # read + execute; patches are written before protection
+    return True
+
 
 def encode_id(value):
     alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+-'
@@ -88,6 +106,7 @@ def link(game, out):
     image = bytearray(span(raw, pos, size))
     if pos+size != len(raw):
         raise ValueError('unexpected boot trailer')
+    add_patch_code_cave(segments,image)
     base = (size+65535) & ~65535
     loads = [p for p in libc['ph'] if p['type'] in (1,0x61000010)]
     libsize = max(p['vaddr']+p['memsz'] for p in loads)

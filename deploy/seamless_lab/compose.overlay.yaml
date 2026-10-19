@@ -1,0 +1,34 @@
+services:
+  shadnet:
+    environment:
+      BBPORT_TRUST_TAILNET_STUN: "1"
+
+  game-api:
+    environment:
+      # Every Windows client reaches these ports through its own loopback proxy.
+      SEAMLESS_ADVERTISE_IP: "127.0.0.3"
+
+  bridge:
+    profiles: ["server-bridge"]
+    build:
+      context: ../../tools/embedded_net
+      dockerfile: Dockerfile.linux
+    image: bbport-net:seamless-lab
+    network_mode: host
+    # The current cloud host cannot hairpin to its own public IP. Keep the
+    # certificate authority while routing this local control connection inward.
+    extra_hosts:
+      - "82.157.168.20:127.0.0.1"
+    restart: unless-stopped
+    read_only: true
+    command: ["--config", "/etc/bbport/server-net.json"]
+    volumes:
+      - ./server-net.remote.json:/etc/bbport/server-net.json:ro
+      - seamless-bridge-state:/var/lib/bbport-seamless
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  seamless-bridge-state:

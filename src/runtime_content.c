@@ -1,9 +1,12 @@
-/* Offline AppContent provider for the configured base-game profile.
- * No package/DLC mounting, downloads, entitlement or license emulation. */
+/* Offline AppContent provider for the configured base-game profile. Add-on folders in
+ * <user>/addcont/<title id>/<entitlement label> are reported as installed; their files are not
+ * mounted because Bloodborne 1.09 already contains The Old Hunters data. */
 #include "runtime.h"
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #define INVALID_ID ((int32_t)0x805a1000)
 #define NOT_LOADED ((int32_t)0x805a1001)
 #define PARAMETER ((int32_t)0x80d90002)
@@ -69,12 +72,46 @@ static ABI int32_t param_int(uint32_t id,int32_t *out) {
     printf("Runtime: AppContent parameter %u = %d\n",id,*out);
     return 0;
 }
+#define LABEL_SIZE 17
+#define ADDON_INSTALLED 4u
+typedef struct { char label[LABEL_SIZE]; char padding[3]; uint32_t status; } AddonInfo;
 static ABI int32_t addon_list(uint32_t service,void *list,uint32_t capacity,uint32_t *hits) {
     require_initialized();
     if (service) { fputs("STOP: nonzero AppContent service label unsupported\n",stderr); exit(21); }
     if ((!capacity || !list) && !hits) return PARAMETER;
-    /* No add-ons are mounted by this provider. Never touch unused list slots. */
-    if (hits) *hits=0;
+    const int fill=list && capacity;
+    uint32_t count=0;
+    char root[1024];
+    snprintf(root,sizeof(root),"%s/addcont",runtime_file_user_dir());
+    DIR *titles=opendir(root);
+    for (struct dirent *title;titles && (title=readdir(titles));) {
+        if (title->d_name[0]=='.') continue;
+        char title_path[1300];
+        if ((size_t)snprintf(title_path,sizeof(title_path),"%s/%s",root,title->d_name)>=sizeof(title_path)) continue;
+        struct stat title_stat;
+        if (stat(title_path,&title_stat) || !S_ISDIR(title_stat.st_mode)) continue;
+        DIR *labels=opendir(title_path);
+        for (struct dirent *label;labels && (label=readdir(labels));) {
+            size_t n=strlen(label->d_name);
+            if (label->d_name[0]=='.' || n>=LABEL_SIZE || (fill && count>=capacity)) continue;
+            char label_path[1500];
+            if ((size_t)snprintf(label_path,sizeof(label_path),"%s/%s",title_path,label->d_name)>=sizeof(label_path)) continue;
+            struct stat label_stat;
+            if (stat(label_path,&label_stat) || !S_ISDIR(label_stat.st_mode)) continue;
+            if (fill) {
+                AddonInfo info;
+                memset(&info,0,sizeof(info));
+                memcpy(info.label,label->d_name,n);
+                info.status=ADDON_INSTALLED;
+                memcpy((unsigned char *)list+(size_t)count*sizeof(info),&info,sizeof(info));
+            }
+            ++count;
+        }
+        if (labels) closedir(labels);
+    }
+    if (titles) closedir(titles);
+    if (hits) *hits=count;
+    if (count) printf("Runtime: AppContent add-ons reported installed (%s): %u\n",root,count);
     ++lists; return 0;
 }
 uintptr_t runtime_content_resolve(const char *name) {

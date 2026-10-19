@@ -16,9 +16,10 @@
 namespace BbThreads {
 
 #ifdef _WIN32
-// Windows (bbport_platform.cpp): the process affinity mask; THREAD_PRIORITY_IDLE.
+// Windows (bbport_platform.cpp): the process affinity mask; THREAD_PRIORITY_IDLE, NORMAL.
 unsigned Available();
 void MakeBackground();
+void MakeForeground();
 #else
 /// Hardware threads available to the process.
 inline unsigned Available() {
@@ -36,6 +37,13 @@ inline void MakeBackground() {
     if (sched_setscheduler(0, SCHED_IDLE, &param) != 0) {
         setpriority(PRIO_PROCESS, static_cast<id_t>(gettid()), 19);
     }
+}
+
+/// Back to the normal policy, for work another thread may be waiting on (best effort: a
+/// thread that fell back to nice 19 may not be allowed to lower it again).
+inline void MakeForeground() {
+    sched_param param{};
+    sched_setscheduler(0, SCHED_OTHER, &param);
 }
 #endif
 

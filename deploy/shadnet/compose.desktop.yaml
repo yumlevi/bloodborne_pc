@@ -1,0 +1,20 @@
+services:
+  shadnet:
+    build:
+      context: .
+      args:
+        SHADNET_COMMIT: 5a849a192fd4450593c57b10697316ac324c856e
+    image: bbport-shadnet:5a849a1
+    container_name: bbport-shadnet
+    restart: unless-stopped
+    environment:
+      SHADNET_SEAMLESS: ${SHADNET_SEAMLESS:-false}
+    ports:
+      - "${SHADNET_BIND_IP:?Set SHADNET_BIND_IP to the Windows LAN address}:31313:31313/tcp"
+      - "${SHADNET_BIND_IP:?Set SHADNET_BIND_IP to the Windows LAN address}:31314:31314/udp"
+      - "${SHADNET_BIND_IP:?Set SHADNET_BIND_IP to the Windows LAN address}:31315:31315/tcp"
+    volumes:
+      - shadnet-data:/var/lib/shadnet
+
+volumes:
+  shadnet-data:

@@ -1,17 +1,26 @@
 out/
 __pycache__/
+*.pyc
 user/
 *.mp4
 bbport.ini
 fsr4_shaders/
 pgo/
 *.png
+!tools/setup/assets/launcher-background.png
 last_run.log
 dist/
+local_deps/
+runtime/
+python/
+.test-tmp/
+packaging/windows-portable-payload/
+packaging/windows-portable-payload.zip
 packaging/runtime-paths.nix
 fsr4_411/
 vkd3d-proton.cache
 tools/fsr4cap/*.exe
+/tools/embedded_net/bbport-net.exe
 perf.data
 # Local leftovers: patch backups, generated SPIR-V, analysis outputs, test saves and routes
 *.orig
@@ -24,3 +33,16 @@ perf.data
 mods.json
 patches.json
 /Bloodborne.cmd
+
+# Local shadNet deployment settings and database
+/deploy/shadnet/.env
+/.evn
+/deploy/shadnet/data/
+/bbport-online-remote-*.zip
+/bbport-online-shadnet-build*.zip
+/bbport-online-init-*.zip
+/bbport-online-shadnet-archive-*.zip
+/bbport-online-shadnet-sha-*.zip
+/bbport-online-shadnet-cache-*.zip
+/bbport-online-shadnet-hash2-*.zip
+/bbport-online-proxy-fix-*.zip

@@ -16,6 +16,10 @@ typedef struct {
 } BbGpuConfig;
 /* Registers kernel event queues (needed with or without graphics). */
 void bbgpu_register_kernel(void);
+/* Co-op: the game folder and param.sfo identity for the network and PSN libraries. */
+void bbnet_configure(const char *app0, const char *serial, const char *title, const char *app_ver);
+/* Online startup gate: 1 when disabled or at least one shadNet user authenticated. */
+int bbnet_online_ready(void);
 /* Creates window, Vulkan device, presenter and GPU command processor. */
 int bbgpu_init(const BbGpuConfig *config);
 /* Function for an imported NID ("NID#lib#mod"), or 0 when the GPU library does not provide it. */
@@ -33,6 +37,10 @@ int bbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int bbgpu_text_input_poll(char *out_utf8, uint64_t size);
 /* 1 while the in-game settings menu is open: the game's pad input is held neutral. */
 int bbgpu_overlay_captures_input(void);
+/* Relative mouse state collected on the SDL window thread. Returns 1 while gameplay owns the
+ * mouse (relative mode); dx/dy and wheel are consumed, buttons is the current SDL button mask.
+ * F10 toggles capture, and the overlay/text input/focus loss releases it automatically. */
+int bbgpu_mouse_read(int32_t *dx, int32_t *dy, int32_t *wheel, uint32_t *buttons);
 /* Number of symbols registered by the vendored libraries (diagnostics). */
 unsigned bbgpu_symbol_count(void);
 #ifdef __cplusplus

@@ -1,0 +1,16 @@
+Bundled shadNet LAN server
+======================
+
+Server
+  Project: https://github.com/Wozzardman/shadnet-p2p
+  Source revision: 5a849a192fd4450593c57b10697316ac324c856e
+  Release: pre-release-shadnet-2026-08-16-5a849a192fd4450593c57b10697316ac324c856e
+  Windows archive SHA256: 715302BBCB9EA9B5DEBFEE3F47C1391CFB7FC3963BEC6D65470EFFF3F29D43D1
+  License: GPL-2.0-or-later (see the upstream REUSE.toml and file SPDX headers)
+
+The native bbport client provides the matching protocol. The currently tested
+Bloodborne target is CUSA03173 version 01.09. This server is experimental and does not
+contain game files, PlayStation firmware, or Sony system modules.
+
+Complete corresponding server source code is available at the project URL and exact revision above.
+The GPL-2.0 license text is included beside the installed server.

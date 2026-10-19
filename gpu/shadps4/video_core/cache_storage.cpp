@@ -19,6 +19,13 @@
 #include <mutex>
 #include <queue>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#endif
+
 namespace {
 
 std::mutex submit_mutex{};
@@ -151,9 +158,31 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                     LOG_ERROR(Render, "Failed to add {} to the archive", path.string().c_str());
                 }
             } else {
+                // Write under a temporary name and replace only after a complete flush. A crash
+                // while caching a shader can no longer leave a truncated entry for the next run.
                 using namespace Common::FS;
-                const auto file = IOFile{path, FileAccessMode::Create};
-                file.Write(v);
+                auto temp=path;
+                temp += ".tmp";
+                bool written=false;
+                {
+                    const auto file=IOFile{temp,FileAccessMode::Create};
+                    written=file.IsOpen() && file.Write(v)==v.size() && file.Commit();
+                }
+                std::error_code ec;
+                if (written) {
+#ifdef _WIN32
+                    if (!MoveFileExW(temp.c_str(),path.c_str(),
+                                     MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH)) {
+                        ec=std::error_code((int)GetLastError(),std::system_category());
+                    }
+#else
+                    std::filesystem::rename(temp,path,ec);
+#endif
+                }
+                if (!written || ec) {
+                    LOG_ERROR(Render,"Failed to write shader cache {}",path.string());
+                    std::filesystem::remove(temp,ec);
+                }
             }
         }};
         std::scoped_lock lock{m_request};

@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+# Pinned GPL-2.0-or-later BBSC source; the isolated lab image does not include
+# game files, mod DLLs, or any production shadNet database.
+ARG BBSC_REF=315f76c38b1ca5843b082f93f47927a9193ad94a
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/* \
+    && git init /opt/bbsc \
+    && git -C /opt/bbsc remote add origin https://github.com/Classmg22/BBSC.git \
+    && git -C /opt/bbsc sparse-checkout init --cone \
+    && git -C /opt/bbsc sparse-checkout set server/gameserver \
+    && git -C /opt/bbsc fetch --depth=1 --filter=blob:none origin main \
+    && git -C /opt/bbsc checkout --detach FETCH_HEAD \
+    && test "$(git -C /opt/bbsc rev-parse HEAD)" = "$BBSC_REF"
+COPY lab_server.py /app/lab_server.py
+COPY lab_region_info.py /opt/bbsc/server/gameserver/lab_region_info.py
+ENTRYPOINT ["python", "/app/lab_server.py"]

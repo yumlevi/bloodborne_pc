@@ -306,6 +306,9 @@ static ABI int32_t direct_allocate(int64_t low, int64_t high, uint64_t size,
         }
         if (!overlap) break;
     }
+#ifdef _WIN32
+    if (win_mem_commit(start,size)) { write_unlock(); return NO_MEMORY; }
+#endif
     blocks[slot] = (Block){start, size, type, 1}; *out = (int64_t)start;
     ++allocations; live_bytes += size;
     write_unlock();
@@ -401,6 +404,12 @@ static int32_t map_flexible_locked(void **inout, uint64_t size, int prot, int fl
     if (flexible_bytes+size>FLEXIBLE_SIZE || pool()) return NO_MEMORY;
     uint64_t phys=flex_alloc(size);
     if (phys==UINT64_MAX) return NO_MEMORY;
+#ifdef _WIN32
+    if (win_mem_commit(phys,size)) {
+        flex_set((phys-POOL_SIZE)/PAGE,size/PAGE,0);
+        return NO_MEMORY;
+    }
+#endif
     int32_t result=place(inout,size,prot,flags,PAGE,KIND_FLEXIBLE,0,phys);
     if (result) flex_free(phys,size); else ++flexible_maps;
     return result;

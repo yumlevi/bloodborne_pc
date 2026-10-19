@@ -20,6 +20,8 @@ static VirtualAlloc2Fn virtual_alloc2;
 static MapViewOfFile3Fn map_view3;
 static UnmapViewOfFile2Fn unmap_view2;
 static HANDLE section;
+static unsigned char *section_backing;
+static uint64_t section_size;
 static uintptr_t space_start, space_end;
 typedef struct { uintptr_t start, end; uint64_t phys; } View;
 static View *views;
@@ -48,11 +50,26 @@ int win_mem_space(uintptr_t start, uintptr_t end) {
     return 0;
 }
 int win_mem_section(uint64_t size, void **backing) {
-    section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE | SEC_COMMIT,
+    /* SEC_COMMIT charges the full 5-10 GiB guest pool against the Windows commit
+     * limit at startup.  Reserve it instead and commit physical ranges when the
+     * guest allocates them.  Aliased section views see the same committed pages. */
+    section = CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, PAGE_EXECUTE_READWRITE | SEC_RESERVE,
                                  (DWORD)(size >> 32), (DWORD)size, NULL);
     if (!section) { report("creating the memory pool section", 0, size); return -1; }
     *backing = MapViewOfFile(section, FILE_MAP_ALL_ACCESS, 0, 0, size);
     if (!*backing) { report("mapping the memory pool", 0, size); return -1; }
+    section_backing=*backing; section_size=size;
+    return 0;
+}
+int win_mem_commit(uint64_t offset, uint64_t size) {
+    if (!section_backing || offset>section_size || size>section_size-offset) {
+        SetLastError(ERROR_INVALID_PARAMETER); return -1;
+    }
+    void *address=section_backing+offset;
+    if (VirtualAlloc(address,(SIZE_T)size,MEM_COMMIT,PAGE_READWRITE)!=address) {
+        report("committing memory pool pages",(uintptr_t)offset,(uintptr_t)(offset+size));
+        return -1;
+    }
     return 0;
 }
 static DWORD page_mode(int prot) {

@@ -13,6 +13,12 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 EBOOT_BASE=0x400000
+TRAINER_PATCHES={
+    'Trainer Infinite Health (CUSA03173 1.09)',
+    'Trainer Infinite Echoes (CUSA03173 1.09)',
+    'Trainer Upgrade Materials (CUSA03173 1.09)',
+}
+TRAINER_CODE_CAVE=(0x50DB000,0x50DC000)
 # BB_FPS presets: patch names from patches/Bloodborne.xml (app version 01.09). Their patch lists
 # follow shadps4-emu/ps4_cheats PATCHES/Bloodborne.xml of 2026-10-02 (older lists missed timesteps:
 # messengers and loading screen pictures replayed their animations).
@@ -25,6 +31,16 @@ PRESET_SCALES=[1.0,1.5,1.7,2.0,3.0]
 # and the UI movie viewport. Keep the latter at native size so glyph rasterisation and
 # vector tessellation do not inherit the scene's FSR resolution.
 RESOLUTION_TEMPLATE='Resolution Patch 1280x720 (16:9)'
+# Use the authored patch for each aspect ratio. Its extra writes fix the lock-on and
+# health-bar positions; changing only the scene width/height of the 16:9 patch does not.
+RESOLUTION_PATCHES={
+    (640,360):'16:9', (960,540):'16:9', (1280,720):'16:9',
+    (1440,810):'16:9', (1600,900):'16:9', (2560,1440):'16:9',
+    (3840,2160):'16:9', (1280,800):'16:10', (1920,1200):'16:10',
+    (2560,1600):'16:10', (2560,1080):'21:9', (3440,1440):'21:9',
+    (5120,2160):'21:9', (3840,1080):'32:9', (5120,1440):'32:9',
+    (1280,960):'4:3', (1440,1080):'4:3',
+}
 # Effect switches (bbport.ini, in-game menu, launcher): key -> (patch when the key is 0, patch
 # when it is 1). The game reads these at start; a change applies after a restart.
 EFFECTS={
@@ -44,6 +60,9 @@ MODEL_LOD={'-2':'Model LOD -2 (Highest)','1':'Model LOD 1 (Lower)','2':'Model LO
 
 
 def validate_patch_requirements(names, game):
+    if ('Trainer Infinite Health (CUSA03173 1.09)' in names and
+            'Player No Dead (Read note)' in names):
+        raise ValueError('Infinite Health conflicts with Player No Dead; enable only one')
     if 'Restore Debug Camera' in names and 'Enemy Control' in names:
         raise ValueError('Restore Debug Camera conflicts with Enemy Control; enable only one')
     if 'Restore Debug Menu (READ NOTES)' in names:
@@ -121,12 +140,22 @@ def scaled_sizes(settings):
     return render,out
 
 
-def resolution_writes(xml,size,app_version,segments,ui=OUTPUT_SIZE):
-    writes=compile_patches(xml,[RESOLUTION_TEMPLATE],app_version,segments)
-    replacements={SCENE_WIDTH:(0xB8,0x500,size[0]),
-                  SCENE_HEIGHT:(0xB8,0x2D0,size[1]),
-                  UI_WIDTH:(0xB8,0x500,ui[0]),
-                  UI_HEIGHT:(0xB9,0x2D0,ui[1])}
+def resolution_writes(xml,size,app_version,segments,ui=OUTPUT_SIZE,output=OUTPUT_SIZE):
+    aspect=RESOLUTION_PATCHES.get(output)
+    if aspect:
+        template=f'Resolution Patch {output[0]}x{output[1]} ({aspect})'
+        old=output
+    elif output[0]*9==output[1]*16:
+        # Custom 16:9 CLI output has no authored variant; its coordinate fixes are shared.
+        template=RESOLUTION_TEMPLATE
+        old=(1280,720)
+    else:
+        raise ValueError(f'unsupported output aspect ratio: {output[0]}x{output[1]}')
+    writes=compile_patches(xml,[template],app_version,segments)
+    replacements={SCENE_WIDTH:(0xB8,old[0],size[0]),
+                  SCENE_HEIGHT:(0xB8,old[1],size[1]),
+                  UI_WIDTH:(0xB8,old[0],ui[0]),
+                  UI_HEIGHT:(0xB9,old[1],ui[1])}
     out=[]
     seen=set()
     for offset,data in writes:
@@ -176,7 +205,10 @@ def compile_patches(xml, names, app_version, segments):
         for line in found[name].iter('Line'):
             offset=int(line.get('Address'),0)-EBOOT_BASE
             data=encode(line)
-            if not any(start<=offset and offset+len(data)<=end for start,end in segments):
+            mapped=any(start<=offset and offset+len(data)<=end for start,end in segments)
+            cave=(name in TRAINER_PATCHES and TRAINER_CODE_CAVE[0]<=offset and
+                  offset+len(data)<=TRAINER_CODE_CAVE[1])
+            if not mapped and not cave:
                 raise ValueError(f'{name}: address {line.get("Address")} is outside the eboot')
             writes.append((offset,data))
     return writes
@@ -278,7 +310,10 @@ def main():
     # (UiComposition::NativeViewport), so it is rasterized at the output resolution.
     ui=OUTPUT_SIZE
     if size:
-        writes+=resolution_writes(a.xml,size,a.app_version,segments,ui)
+        output=output_size(read_settings(a.settings))
+        if a.output_res:
+            output=tuple(int(v) for v in a.output_res.lower().split('x'))
+        writes+=resolution_writes(a.xml,size,a.app_version,segments,ui,output)
         if size[0]*size[1]>OUTPUT_SIZE[0]*OUTPUT_SIZE[1]:
             heap='Increased Graphics Heap Sizes'
             writes+=compile_patches(a.xml,[heap],a.app_version,segments)

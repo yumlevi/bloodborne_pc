@@ -238,20 +238,24 @@ void Scheduler::KickRecording(bool force) {
     // Callers kick where nobody holds the raw command buffer: deferral resumes.
     direct_mode = false;
     // Batches of tens of KiB keep the queue handoff cheap relative to the work it carries.
-    if (!force && full_chunks.empty() && record_chunk->Size() < 32 * 1024) {
+    if (!force && full_chunks.empty() && CurrentChunk().Size() < 32 * 1024) {
         return;
     }
-    if (full_chunks.empty() && record_chunk->Empty()) {
+    if (full_chunks.empty() && CurrentChunk().Empty()) {
         return;
     }
+    // Obtain the replacement first, then swap it in before handing the old chunk to the worker.
+    // This closes the null-pointer window reported by a Windows build during area streaming.
+    std::unique_ptr<RecordChunk> handed=record_chunk->Empty() ? nullptr : AcquireChunk();
     bool wake;
     {
         std::scoped_lock lk{recorder_mutex};
         for (auto& chunk : full_chunks) {
             recorder_queue.push_back(std::move(chunk));
         }
-        if (!record_chunk->Empty()) {
-            recorder_queue.push_back(std::move(record_chunk));
+        if (handed) {
+            record_chunk.swap(handed);
+            recorder_queue.push_back(std::move(handed));
         }
         wake = recorder_sleeping;
         queued_chunks.store(recorder_queue.size(), std::memory_order_release);
@@ -260,9 +264,6 @@ void Scheduler::KickRecording(bool force) {
     // A busy recorder picks the new chunks up by itself: waking it is a syscall per draw.
     if (wake) {
         recorder_cv.notify_one();
-    }
-    if (!record_chunk) {
-        record_chunk = AcquireChunk();
     }
 }
 

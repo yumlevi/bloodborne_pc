@@ -11,6 +11,21 @@ from test_probe import package
 
 
 class LinkTests(unittest.TestCase):
+    def test_empty_trainer_code_cave_is_registered_executable(self):
+        with patch.object(link_libc, 'PATCH_CODE_CAVE', (0x1000, 0x1000)):
+            segments=[(0,0x800,5),(0x2000,0x1000,6)]
+            image=bytearray(0x3000)
+            self.assertTrue(link_libc.add_patch_code_cave(segments,image))
+            self.assertIn((0x1000,0x1000,5),segments)
+
+    def test_nonempty_trainer_code_cave_is_not_exposed(self):
+        with patch.object(link_libc, 'PATCH_CODE_CAVE', (0x1000, 0x1000)):
+            segments=[]
+            image=bytearray(0x3000)
+            image[0x1800]=1
+            self.assertFalse(link_libc.add_patch_code_cave(segments,image))
+            self.assertEqual(segments,[])
+
     def fixture(self, version=1, relocs=()):
         main_key=('fixture',('libc',1),('libc',1))
         lib_key=('fixture',('libc',version),('libc',1))

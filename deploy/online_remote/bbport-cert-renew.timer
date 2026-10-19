@@ -1,0 +1,11 @@
+[Unit]
+Description=Check bbport online IP TLS certificate twice daily
+
+[Timer]
+OnCalendar=*-*-* 03,15:19:00
+RandomizedDelaySec=30m
+Persistent=true
+Unit=bbport-cert-renew.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,108 @@
+diff --git a/src/bloodborne_summon_broker.cpp b/src/bloodborne_summon_broker.cpp
+--- a/src/bloodborne_summon_broker.cpp
++++ b/src/bloodborne_summon_broker.cpp
+@@ -448,7 +448,11 @@ QList<QByteArray> SummonBroker::Search(const QJsonObject& request, qint64 nowMs,
+             candidates.push_back({it->updatedAtMs, PrepareAdvertisementForSearch(
+                                                        it->rawAdvertisement, it->advertisement,
+                                                        request, anywhereSummons)});
+-        } else if (m_seamlessCoop && IsSeamlessActiveState(it->state) && requester >= 0 &&
++        } else if (m_seamlessCoop && IsSeamlessActiveState(it->state) &&
++                   (it->state == State::Preparing ||
++                    (it->claimStartedAtMs > 0 &&
++                     nowMs - it->claimStartedAtMs < m_seamlessClaimLeaseMs)) &&
++                   requester >= 0 &&
+                    Integer(it->claim, QStringLiteral("UserId"), -2) == requester &&
+                    MatchesSearch(request, it->advertisement, anywhereSummons)) {
+             candidates.push_back({it->updatedAtMs, PrepareAdvertisementForSearch(
+@@ -515,6 +519,11 @@ SummonBroker::ClaimResult SummonBroker::Claim(const QJsonObject& request,
+     result.targetSessionId = target->advertisement.value(QStringLiteral("SessionId")).toString();
+     result.targetUserId = Integer(target->advertisement, QStringLiteral("UserId"), -1);
+     if (target->state == State::Claimed || target->state == State::Delivered) {
++        if (m_seamlessCoop && target->claimStartedAtMs > 0 &&
++            nowMs - target->claimStartedAtMs >= m_seamlessClaimLeaseMs) {
++            result.status = ClaimStatus::Expired;
++            return result;
++        }
+         result.status =
+             target->claim == request ? ClaimStatus::AlreadyClaimed : ClaimStatus::Conflict;
+         return result;
+@@ -557,7 +567,6 @@ SummonBroker::ConsumeResult SummonBroker::Consume(const QJsonObject& request, qint64 nowMs) {
+             !userId.has_value() ||
+             Integer(it->advertisement, QStringLiteral("UserId"), -1) == *userId;
+         if (sessionMatches && userMatches && it->state != State::Consumed) {
+-            it->updatedAtMs = nowMs;
+             if (m_seamlessCoop && !forceConsume && IsSeamlessActiveState(it->state)) {
+                 ++result.retained;
+                 if (!it->hostPlacement.isEmpty()) {
+@@ -565,6 +574,7 @@ SummonBroker::ConsumeResult SummonBroker::Consume(const QJsonObject& request, qint64 nowMs) {
+                 }
+                 continue;
+             }
++            it->updatedAtMs = nowMs;
+             it->state = State::Consumed;
+             ++result.consumed;
+         }
+diff --git a/src/bloodborne_summon_broker.h b/src/bloodborne_summon_broker.h
+--- a/src/bloodborne_summon_broker.h
++++ b/src/bloodborne_summon_broker.h
+@@ -18,2 +18,2 @@ namespace Bloodborne {
+     enum class State { Advertised, Preparing, Claimed, Delivered, Consumed };
+-    enum class ClaimStatus { Claimed, AlreadyClaimed, NotFound, Conflict };
++    enum class ClaimStatus { Claimed, AlreadyClaimed, NotFound, Conflict, Expired };
+diff --git a/src/webapi_routes_bloodborne.cpp b/src/webapi_routes_bloodborne.cpp
+--- a/src/webapi_routes_bloodborne.cpp
++++ b/src/webapi_routes_bloodborne.cpp
+@@ -225,6 +225,12 @@ void RegisterBloodborneRoutes(QHttpServer& http, bool seamlessCoop) {
+                                    << result.targetSessionId << "requester"
+                                    << Integer(*body, QStringLiteral("UserId"));
+                        break;
++                    case Bloodborne::SummonBroker::ClaimStatus::Expired:
++                        claimStatus = "expired";
++                        qInfo() << "Bloodborne summon: expired claim rejected for session"
++                                << result.targetSessionId << "requester"
++                                << Integer(*body, QStringLiteral("UserId"));
++                        break;
+                    }
+                     QHttpServerResponse response =
+                         SummonResponse(QStringLiteral("SummonDataSummonResponse"));
+diff --git a/tests/test_bloodborne_summon_broker.cpp b/tests/test_bloodborne_summon_broker.cpp
+--- a/tests/test_bloodborne_summon_broker.cpp
++++ b/tests/test_bloodborne_summon_broker.cpp
+@@ -233,3 +233,37 @@ int main() {
++  // A guest that stops posting signs after a claim must not remain searchable
++  // by its old host for the full 15-minute seamless retention window.
++  Bloodborne::SummonBroker staleWithoutCreate(rejoinOptions);
++  CHECK(staleWithoutCreate.Advertise(Parse(advertisement), advertisement, 30'000).state ==
++        Bloodborne::SummonBroker::State::Advertised);
++  CHECK(staleWithoutCreate.Claim(Parse(claim), claim, 30'010).status ==
++        Bloodborne::SummonBroker::ClaimStatus::Claimed);
++  retained = staleWithoutCreate.Consume(Parse(removal), 30'020);
++  CHECK(retained.retained == 1);
++  CHECK(staleWithoutCreate.Search(Parse(search), 30'109).size() == 1);
++  CHECK(staleWithoutCreate.Search(Parse(search), 30'110).isEmpty());
++  CHECK(staleWithoutCreate.Claim(Parse(conflictingClaim), conflictingClaim, 30'110).status ==
++        Bloodborne::SummonBroker::ClaimStatus::Expired);
++  const auto recoveredSign =
++      staleWithoutCreate.Advertise(Parse(advertisement), advertisement, 30'111);
++  CHECK(recoveredSign.state == Bloodborne::SummonBroker::State::Advertised);
++  CHECK(recoveredSign.expiredClaimReset);
++  CHECK(staleWithoutCreate.Claim(Parse(conflictingClaim), conflictingClaim, 30'112).status ==
++        Bloodborne::SummonBroker::ClaimStatus::Claimed);
++
++  // A normal delete may retain an in-flight claim, but it is not a heartbeat:
++  // it must not extend that record's 15-minute-style retention timer.
++  Bloodborne::SummonBroker::Options shortTtlOptions = seamlessOptions;
++  shortTtlOptions.ttlMs = 100;
++  shortTtlOptions.seamlessTtlMs = 200;
++  shortTtlOptions.seamlessClaimLeaseMs = 1'000;
++  Bloodborne::SummonBroker shortTtl(shortTtlOptions);
++  CHECK(shortTtl.Advertise(Parse(advertisement), advertisement, 40'000).state ==
++        Bloodborne::SummonBroker::State::Advertised);
++  CHECK(shortTtl.Claim(Parse(claim), claim, 40'010).status ==
++        Bloodborne::SummonBroker::ClaimStatus::Claimed);
++  CHECK(shortTtl.Consume(Parse(removal), 40'190).retained == 1);
++  CHECK(!shortTtl.StateFor(QStringLiteral("guest-session"), 2465, 40'211).has_value());
++
+   Bloodborne::SummonBroker unclaimedSeamless(seamlessOptions);
+   CHECK(unclaimedSeamless.Advertise(Parse(advertisement), advertisement, 7'000)
+             .state == Bloodborne::SummonBroker::State::Advertised);

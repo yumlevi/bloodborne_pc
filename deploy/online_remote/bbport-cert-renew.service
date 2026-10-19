@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew bbport online IP TLS certificate
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/bbport-online/deploy/online_remote
+ExecStart=/usr/bin/docker compose -f compose.yaml run --rm --no-deps certbot renew --non-interactive --webroot -w /var/www/certbot
+ExecStartPost=/usr/bin/docker compose -f compose.yaml exec -T proxy nginx -s reload

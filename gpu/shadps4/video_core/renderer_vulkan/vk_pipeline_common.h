@@ -53,6 +53,12 @@ public:
         return *stages[u32(stage)];
     }
 
+    /// bbport: the stage Infos read at bind time. A pipeline built on a draw-preparation worker
+    /// from that worker's copies is pointed at the programs' Infos, as the GPU thread's are.
+    void RebindStages(std::span<const Shader::Info* const> infos) noexcept {
+        std::ranges::copy(infos, stages.begin());
+    }
+
     bool IsCompute() const {
         return is_compute;
     }

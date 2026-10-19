@@ -61,6 +61,10 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
 uintptr_t runtime_kernel_resolve(const char *name);
 uintptr_t runtime_file_resolve(const char *name);
 uintptr_t runtime_services_resolve(const char *name);
+/* Opt-in LAN transport.  It returns no exports unless BB_NETWORK_MODE=lan, so the
+ * existing offline service contracts remain the default. */
+uintptr_t runtime_network_resolve(const char *name);
+uintptr_t runtime_np_lan_resolve(const char *name);
 void runtime_file_report(void);
 void runtime_file_configure(const char *app0, const char *user);
 int runtime_file_mount(const char *guest, const char *host);
